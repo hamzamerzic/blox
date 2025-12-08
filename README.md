@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="images/logo.png" width="400" alt="blox logo">
+  <img src="https://i.ibb.co/FLmR2T3r/logo.png" width="400" alt="blox logo">
   
   <h1>blox</h1>
   
@@ -154,23 +154,23 @@ Notice how `readout` and `mlp` are siblings in the graph, while `hidden` is nest
 ```text
 net: Graph # Param: 385 (1.5 KB)(
   rng=Param[N](
-    shape=(2,),
-    dtype=object,
     metadata={'tag': 'rng'},
-    value=(<jax.Array...>, <jax.Array...>)
+    value=(<jax.Array key<fry>()>, <jax.Array(4, dtype=uint32)>),
   ),
-  readout=CustomLinear # Param: 33 (132.0 B)(
+  readout=CustomLinear # Param: 33 (132 B)(
     output_size=1,
-    w=Param[T](value=<jax.Array...>),
-    b=Param[T](value=<jax.Array...>)
+    w=Param[T](
+      shape=(32, 1),
+      dtype='float32',
+      value=<jax.Array float32(32, 1) ≈-0.0097 ±0.27 [≥-0.4, ≤0.41] nonzero:32>,
+    ),
+    b=Param[T](shape=(1,), dtype='float32', value=<jax.Array([0.], dtype=float32)>),
   ),
   mlp=CustomMLP # Param: 352 (1.4 KB)(
-    hidden=CustomLinear # Param: 352 (1.4 KB)(
-      output_size=32,
-      w=Param[T](value=<jax.Array...>),
-      b=Param[T](value=<jax.Array...>)
-    )
-  )
+    hidden_size=32,
+    output_projection=Link(path='net/readout'),
+    hidden=CustomLinear # Param: 352 (1.4 KB)(output_size=32, w=Param[T](shape=(10, 32), dtype='float32', value=<jax.Array float32(10, 32) ≈-0.0016 ±0.22 [≥-0.37, ≤0.38] nonzero:320>), b=Param[T](shape=(32,), dtype='float32', value=<jax.Array float32(32,) ≈0.0 ±0.0 [≥0.0, ≤0.0] zero:32>)),
+  ),
 )
 ```
 

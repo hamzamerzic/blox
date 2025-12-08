@@ -11,11 +11,12 @@ It is designed to be strictly typed and utilizes chex for runtime shape checking
 """
 
 from __future__ import annotations
+import inspect
 from typing import Any, Callable, Generic, TypeVar, cast
-import jax
-import jax.numpy as jnp
 
 import chex
+import jax
+import jax.numpy as jnp
 
 # ==============================================================================
 # Type Definitions
@@ -408,7 +409,42 @@ class Module:
     Args:
       graph: The graph node representing this module's scope.
     """
+    if '__type__' in graph.metadata:
+      owner = graph.metadata['__type__']
+      raise ValueError(
+        f"Graph node '{graph.name}' is already owned by '{owner}'. "
+        "Did you forget to call graph.child('name')?"
+      )
+
     self.graph = graph
+    self._capture_constructor_args()
+
+  def _capture_constructor_args(self) -> None:
+    """Captures the subclass constructor arguments into graph metadata."""
+    # Register the class name.
+    self.graph.metadata['__type__'] = self.__class__.__name__
+
+    # Walk back up the stack to find the subclass __init__ frame.
+    frame = inspect.currentframe().f_back.f_back  # type: ignore
+
+    if frame:
+      # Get explicit argument names and values.
+      arg_info = inspect.getargvalues(frame)
+
+      config = {}
+
+      # Capture standard arguments (positional/keyword).
+      for arg_name in arg_info.args:
+        if arg_name not in ('self', 'graph', '__class__'):
+          config[arg_name] = arg_info.locals[arg_name]
+      if arg_info.keywords:
+        kwargs = arg_info.locals[arg_info.keywords]
+        config.update(kwargs)
+
+      # Filter out private attributes.
+      clean_config = {k: v for k, v in config.items() if not k.startswith('_')}
+
+      self.graph.metadata.update(clean_config)
 
   def get_param(
     self,

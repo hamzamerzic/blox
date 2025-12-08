@@ -5,7 +5,8 @@ Integrates with Treescope for interactive inspection.
 
 from __future__ import annotations
 from typing import Any
-from treescope import repr_lib
+
+import treescope
 
 from .interfaces import Graph, Module, Params, Variable
 
@@ -30,7 +31,7 @@ class Leaf:
 
     status = '[T]' if self.var.trainable else '[N]'
 
-    return repr_lib.render_object_constructor(
+    return treescope.repr_lib.render_object_constructor(
       object_type=type(f'Param{status}', (), {}),
       attributes=attr,
       path=path,
@@ -46,7 +47,7 @@ class Link:
     self.path = path
 
   def __treescope_repr__(self, path: str, subtree_renderer: Any) -> Any:
-    return repr_lib.render_object_constructor(
+    return treescope.repr_lib.render_object_constructor(
       object_type=type(self),
       attributes={'path': self.path},
       path=path,
@@ -110,7 +111,7 @@ class NodeView:
       stats = f' # Param: {self.total_params} ({self._format_size(self.bytes)})'
       title += stats
 
-    return repr_lib.render_object_constructor(
+    return treescope.repr_lib.render_object_constructor(
       object_type=type(title, (), {}),
       attributes=flat_dict,
       path=path,
@@ -119,11 +120,12 @@ class NodeView:
     )
 
 
-def display(graph: Graph, params: Params, is_root: bool = True) -> NodeView:
+def _view(graph: Graph, params: Params, is_root: bool = True) -> NodeView:
+  """Internal helper to recursively build the NodeView."""
   prefix = f'{graph.path}/' if graph.path else ''
 
   my_params = {}
-  # Access private data for visualization purposes
+  # Access private data for visualization purposes.
   # pylint: disable=protected-access
   for key, value in params._data.items():
     if key.startswith(prefix) or (not prefix and key):
@@ -137,12 +139,18 @@ def display(graph: Graph, params: Params, is_root: bool = True) -> NodeView:
 
   my_modules = {}
   for name, child_node in graph._children.items():
-    my_modules[name] = display(child_node, params, is_root=False)
+    my_modules[name] = _view(child_node, params, is_root=False)
 
-  # Use the newly added metadata field safely
+  # Use the newly added metadata field safely.
   typename = graph.metadata.get('__type__', 'Graph')
   if is_root:
     typename = f'{graph.name}: {typename}'
 
   clean_config = {k: v for k, v in graph.metadata.items() if k != '__type__'}
   return NodeView(typename, clean_config, my_params, my_modules)
+
+
+def display(graph: Graph, params: Params) -> None:
+  """Builds the view and renders it with Treescope."""
+  view = _view(graph, params, is_root=True)
+  treescope.show(view)
