@@ -68,7 +68,7 @@ def test_rng_updates_during_training():
       _, new_p = p.next_key()
       return x, new_p
 
-  dropout = MockDropout(bx.Graph('drop'))
+  dropout = MockDropout(graph.child('drop'))
 
   @jax.jit
   def dropout_train_step(p, inputs):

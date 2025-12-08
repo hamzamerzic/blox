@@ -60,6 +60,8 @@ class Graph:
     self._children: dict[str, Graph] = {}
     # Metadata storage for visualization or auxiliary info.
     self.metadata: dict[str, Any] = {}
+    # Track if this node is the root of the hierarchy.
+    self._is_root = True
 
   def child(self, name: str) -> Graph:
     """Creates or retrieves a child node in the graph hierarchy.
@@ -102,6 +104,8 @@ class Graph:
 
   def _set_parent(self, parent: Graph) -> None:
     self.path = f'{parent.path}/{self.name}'
+    # This node is now part of a hierarchy, so it is no longer a root.
+    self._is_root = False
 
 
 class Variable:
@@ -409,6 +413,14 @@ class Module:
     Args:
       graph: The graph node representing this module's scope.
     """
+    # Prevent binding directly to the root graph.
+    if graph._is_root:
+      raise ValueError(
+        f"Cannot bind module '{self.__class__.__name__}' directly to the "
+        f"root graph node '{graph.name}'. Please create a child scope "
+        f"using `graph.child('name')`."
+      )
+
     if '__type__' in graph.metadata:
       owner = graph.metadata['__type__']
       raise ValueError(

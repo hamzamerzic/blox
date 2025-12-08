@@ -48,23 +48,23 @@ def test_linear_learning():
   # Train step.
   @jax.jit
   def step(p):
-    # 1. Split params: We only want gradients for trainable weights.
-    #    The RNG state (and any frozen config) goes into 'non_trainable'.
+    # Split params: We only want gradients for trainable weights.
+    #   The RNG state (and any frozen config) goes into 'non_trainable'.
     trainable, non_trainable = p.partition(lambda _, v: v.trainable)
 
     def loss(t):
-      # 2. Merge back to run the model (model needs full state)
+      # Merge back to run the model (model needs full state)
       full_params = t.merge(non_trainable)
       pred, _ = layer(full_params, x)
       return jnp.mean((pred - y_target) ** 2)
 
-    # 3. Grad w.r.t 'trainable' only
+    # Grad w.r.t 'trainable' only
     grads = jax.grad(loss)(trainable)
 
-    # 4. Update
+    # Update
     new_trainable = jax.tree.map(lambda w, g: w - 0.1 * g, trainable, grads)
 
-    # 5. Return full state (merged)
+    # Return full state (merged)
     return new_trainable.merge(non_trainable)
 
   # Train for a few steps.
@@ -74,3 +74,23 @@ def test_linear_learning():
 
   pred, _ = layer(curr, x)
   assert jnp.allclose(pred, y_target, atol=1e-2)
+
+
+def test_root_node_protection():
+  """Verifies that modules cannot be bound directly to the root graph node."""
+  graph = bx.Graph('root')
+
+  # Attempting to bind to root should fail.
+  try:
+    bx.Linear(graph, output_size=10)
+    # If the line above doesn't raise, we force a failure.
+    raise AssertionError('Module allowed binding to root graph node.')
+  except ValueError as e:
+    # Verify we caught the correct error message.
+    assert 'root graph node' in str(e)
+
+  # Binding to a child should succeed.
+  try:
+    bx.Linear(graph.child('safe_layer'), output_size=10)
+  except ValueError:
+    raise AssertionError('Module failed to bind to a valid child node.')
