@@ -32,10 +32,12 @@ It provides a minimal, object-oriented layer solely for organizing your code, wh
 
 ## 📦 Installation
 
-```bash
-git clone https://github.com/hamzamerzic/blox.git
-cd blox
-pip install -e .
+Since blox uses JAX, check out [JAX installation instructions on CPUs, GPUs and TPUs](https://jax.readthedocs.io/en/latest/installation.html).
+
+You will need Python 3.10 or later. Install blox from PyPi:
+
+```
+pip install jax-blox
 ```
 
 ## 🚀 Quick Start
@@ -66,8 +68,6 @@ class CustomLinear(bx.Module):
       params: bx.Params,
       inputs: jax.Array,
   ) -> tuple[jax.Array, bx.Params]:
-    # Request parameters explicitly from the container.
-    # The RNG key is automatically derived from the graph path.
     w_shape = (inputs.shape[-1], self.output_size)
     w, params = self.get_param(
         params, 'w', w_shape, jax.nn.initializers.glorot_uniform()
@@ -92,14 +92,12 @@ class CustomMLP(bx.Module):
       self,
       graph: bx.Graph,
       hidden_size: int,
-      # Inject a pre-built module instance.
+      # We can either inject externally created modules...
       output_projection: bx.Module,
   ) -> None:
     super().__init__(graph)
-    # Internal layer: We create it here, so it lives in our scope.
+    # ... or create new ones.
     self.hidden_proj = CustomLinear(graph.child('hidden'), hidden_size)
-    
-    # Injected layer: It was created outside, so we just store the reference.
     self.output_projection = output_projection
 
   def __call__(
@@ -108,12 +106,9 @@ class CustomMLP(bx.Module):
       inputs: jax.Array,
   ) -> tuple[jax.Array, bx.Params]:
     # Chain the functional transformations.
-    x, params = self.hidden_proj(params, inputs)
-    x = jax.nn.relu(x)
-    
-    # The output projection knows where to find its own params in the container.
-    outputs, params = self.output_projection(params, x)
-    return outputs, params
+    hidden, params = self.hidden_proj(params, inputs)
+    hidden = jax.nn.relu(hidden)
+    return self.output_projection(params, hidden)
 ```
 
 ### Initialization & Visualization
@@ -121,30 +116,28 @@ class CustomMLP(bx.Module):
 We cleanly separate the "Initialization phase" (traversing the graph to create parameters) from the "Runtime phase" (training the parameters).
 
 ```python
-# Define the structure (Wiring).
+# Define the structure for wiring modules.
 graph = bx.Graph('net')
 
-# Create the output layer explicitly at the root level ('net/readout').
+# Create the output layer explicitly and use it to create our CustomMLP.
 readout = CustomLinear(graph.child('readout'), output_size=1)
-
-# Pass it into the MLP. 
-# The MLP lives at 'net/mlp', but it uses 'readout' which lives at 'net/readout'.
 model = CustomMLP(graph.child('mlp'), hidden_size=32, output_projection=readout)
 
-# Create Data and Seed.
+# Obtain some data.
 inputs = jnp.ones((1, 10))
+
+# Initialize the parameters.
+# Params start with an RNG seed that is used to initialize future parameters.
 params = bx.Params(seed=42)
 
-# Initialization Pass.
-# We run the model once to populate the params container.
-outputs, params = model(params, inputs)
+# During initialization, parameters are added to Params.
+unused_outputs, params = model(params, inputs)
 
-# Finalize initialization.
-# This prevents further changes to the parameter structure (like accidentally 
-# adding new parameters after initialization).
+# Finalizing Params prevents further changes to the parameter structure
+# (like accidentally adding new parameters after initialization).
 params = params.finalize()
 
-# Visualize.
+# Visualize the modules and parameters.
 bx.display(graph, params)
 ```
 
@@ -176,7 +169,7 @@ net: Graph # Param: 385 (1.5 KB)(
 
 ## ⚡ Training (JIT & Gradients)
 
-The `Params` container holds *everything*: weights, biases, RNG state, batch norm statistics, and EMA moving averages.
+The `Params` container holds *everything*: weights, RNG state, batch norm statistics, EMA moving averages, ...
 
 When training, we usually want to differentiate with respect to weights, but we still need to update the non-trainable state (like the RNG counter or batch statistics). **blox** makes this partitioning explicit.
 
