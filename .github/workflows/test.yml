@@ -25,12 +25,13 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        # Installs the package in editable mode along with optional [dev] dependencies
+        # Installs pyrefly via the [dev] extra.
         pip install -e ".[dev]"
 
-    - name: Type check with mypy
+    - name: Type check with Pyrefly
+      # Checks src and tests (as defined in pyproject.toml).
       run: |
-        mypy src
+        pyrefly check --summarize-errors
 
     - name: Run tests with pytest
       run: |

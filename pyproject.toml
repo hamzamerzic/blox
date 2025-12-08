@@ -38,7 +38,7 @@ dev = [
     "pytest",
     "pytest-cov",  # For coverage reports
     "ruff",        # For modern linting
-    "mypy",        # For type checking
+    "pyrefly",        # For type checking
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -69,17 +69,8 @@ select = ["E4", "E7", "E9", "F"]
 ignore = []
 
 [tool.ruff.lint.per-file-ignores]
-"__init__.py" = ["F401"] # Ignore unused imports in __init__ files
+"__init__.py" = ["F401"] # Ignore unused imports in __init__ files.
 
-[tool.mypy]
-python_version = "3.10"
-strict = true
-# These options help prevent errors when importing libraries without type stubs
-ignore_missing_imports = true
-follow_imports = "silent"
-# Clean up output
-show_error_codes = true
-pretty = true
-
-# Explicitly point to your source directory
-files = ["src"]
+[tool.pyrefly]
+# Check both src and tests.
+project-includes = ["src", "tests"]

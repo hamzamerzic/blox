@@ -358,7 +358,9 @@ class Params:
 
   def _clone(self) -> Params:
     """Internal helper to clone the container."""
-    p = object.__new__(Params)
+    # We must cast the raw object to Params so the type checker knows
+    # it has the _data and _initialized attributes.
+    p = cast(Params, object.__new__(Params))
     p._data = self._data.copy()
     p._initialized = self._initialized
     return p
@@ -372,7 +374,8 @@ class Params:
     cls, aux: bool, children: tuple[dict[str, Variable]]
   ) -> Params:
     """Unflattens the container for JAX pytree registration."""
-    p = object.__new__(cls)
+    # We must cast the raw object to Params.
+    p = cast(Params, object.__new__(cls))
     p._data = children[0]
     p._initialized = aux
     return p
@@ -500,7 +503,7 @@ def static_scan(
   Raises:
     ValueError: If inputs are empty or have invalid rank.
   """
-  leaves = jax.tree_util.tree_leaves(inputs)
+  leaves = jax.tree.leaves(inputs)
   if not leaves:
     raise ValueError('The input Pytree cannot be empty.')
 
@@ -557,7 +560,7 @@ def dynamic_scan(
   Raises:
     ValueError: If inputs have invalid rank.
   """
-  for x in jax.tree_util.tree_leaves(inputs):
+  for x in jax.tree.leaves(inputs):
     if x.ndim < 2:
       raise ValueError(f'Input leaves must have rank >= 2, got {x.ndim}.')
 

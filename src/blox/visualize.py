@@ -96,7 +96,8 @@ class NodeView:
     return val
 
   def __treescope_repr__(self, path: str, subtree_renderer: Any) -> Any:
-    flat_dict = {}
+    flat_dict: dict[str, Any] = {}
+
     for k, v in self.config.items():
       flat_dict[k] = self._clean_config_val(v)
     for k, v in self.params.items():
