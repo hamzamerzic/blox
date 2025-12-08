@@ -10,7 +10,7 @@ def test_lstm_sequence_shapes():
 
   # Batch=2, Time=5, Dim=4
   inputs = jnp.ones((2, 5, 4))
-  params = bx.Params(0)
+  params = bx.Params(seed=0)
 
   # Explicitly initialize state.
   state, params = lstm.initial_state(params, inputs)
@@ -30,7 +30,7 @@ def test_lstm_step_signature():
   lstm = bx.LSTM(graph.child('lstm'), hidden_size=10)
 
   inputs = jnp.ones((2, 4))
-  params = bx.Params(0)
+  params = bx.Params(seed=0)
 
   # Initialize state manually.
   state, params = lstm.initial_state(params, inputs)
@@ -53,7 +53,7 @@ def test_lstm_step_raises_on_none_state():
   graph = bx.Graph('root')
   lstm = bx.LSTM(graph.child('lstm'), hidden_size=10)
   inputs = jnp.ones((1, 4))
-  params = bx.Params(0)
+  params = bx.Params(seed=0)
 
   with pytest.raises(
     ValueError, match='The LSTM step method requires a valid prev_state.'
@@ -68,18 +68,18 @@ def test_lstm_static_vs_dynamic():
   lstm = bx.LSTM(graph.child('rnn'), hidden_size=5, is_static=False)
 
   inputs = jnp.ones((2, 10, 4))
-  params = bx.Params(42)
+  params = bx.Params(seed=42)
 
-  # Initialization Pass.
+  # Initialization pass.
   state, params = lstm.initial_state(params, inputs)
   ((_, _), params) = lstm(params, inputs, state)
   params = params.finalize()
 
-  # Run Dynamic.
+  # Run dynamic.
   lstm.is_static = False
   ((y_dyn, _), _) = lstm(params, inputs, state)
 
-  # Run Static.
+  # Run static.
   lstm.is_static = True
   ((y_stat, _), _) = lstm(params, inputs, state)
 
@@ -93,9 +93,9 @@ def test_lstm_reset_logic():
 
   # Batch=1, Time=3
   inputs = jnp.ones((1, 3, 2))
-  params = bx.Params(0)
+  params = bx.Params(seed=0)
 
-  # Initialization Pass.
+  # Initialization pass.
   initial_state, params = lstm.initial_state(params, inputs)
   ((_, _), params) = lstm(params, inputs, initial_state)
   params = params.finalize()

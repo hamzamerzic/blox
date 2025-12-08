@@ -22,12 +22,12 @@ import chex
 # ==============================================================================
 
 Shape = tuple[int, ...]
-Initializer = Callable[[jax.Array, Shape, Any], jax.Array]
+Initializer = jax.nn.initializers.Initializer
 
 InputT = TypeVar('InputT', bound=chex.ArrayTree)
 StateT = TypeVar('StateT', bound=chex.ArrayTree)
 OutputT = TypeVar('OutputT', bound=chex.ArrayTree)
-ResetT = TypeVar('ResetT', bound=chex.ArrayTree | None)
+ResetT = TypeVar('ResetT', bound=chex.ArrayTree)
 
 
 # ==============================================================================
@@ -80,6 +80,24 @@ class Graph:
     child_node._set_parent(self)
     self._children[name] = child_node
     return child_node
+
+  def __truediv__(self, name: str) -> Graph:
+    """Syntactic sugar for creating children using the '/' operator.
+
+    This is semantically equivalent to calling `self.child(name)`.
+
+    Example:
+        # These are identical:
+        sub = graph / 'layer1'
+        sub = graph.child('layer1')
+
+    Args:
+      name: The name of the child node.
+
+    Returns:
+      A new Graph instance representing the child scope.
+    """
+    return self.child(name)
 
   def _set_parent(self, parent: Graph) -> None:
     self.path = f'{parent.path}/{self.name}'
@@ -147,7 +165,7 @@ class Params:
   3. Partitioning state for JIT compilation (trainable vs non-trainable).
   """
 
-  def __init__(self, seed: int | jax.Array) -> None:
+  def __init__(self, *, seed: int | jax.Array) -> None:
     """Initializes the container with a master random seed.
 
     Args:
@@ -171,7 +189,7 @@ class Params:
 
   @property
   def initialized(self) -> bool:
-    """Returns True if the parameters have been finalized (frozen)."""
+    """Returns True if the parameter initialization has been finalized."""
     return self._initialized
 
   def next_key(self) -> tuple[jax.Array, Params]:
@@ -237,9 +255,9 @@ class Params:
     if full_path in self._data:
       return self._data[full_path].value, self
 
-    # Check against modification if frozen.
+    # Check against adding new params if finalized.
     if self._initialized:
-      raise KeyError(f"Parameter '{full_path}' missing in frozen model.")
+      raise KeyError(f"Parameter '{full_path}' is missing.")
 
     # Consume RNG to generate a fresh key.
     key, new_p = self.next_key()
@@ -281,7 +299,7 @@ class Params:
   ) -> tuple[Params, Params]:
     """Splits params into two containers based on the predicate.
 
-    Useful for separating trainable weights from frozen statistics (Batch Norm)
+    Useful for separating trainable weights from statistics (e.g. Batch Norm)
     or RNG state before passing to an optimizer.
 
     Args:
@@ -300,6 +318,18 @@ class Params:
     t, f = self._clone(), self._clone()
     t._data, f._data = t_data, f_data
     return t, f
+
+  def split_trainable(self) -> tuple[Params, Params]:
+    """Splits the parameters into trainable and non-trainable sets.
+
+    This is a convenience wrapper around `partition` specifically for training.
+    The first return value contains all parameters where `trainable=True`.
+    The second contains everything else (including RNG state).
+
+    Returns:
+      A tuple (trainable_params, non_trainable_params).
+    """
+    return self.partition(lambda p, v: v.trainable)
 
   def merge(self, other: Params) -> Params:
     """Combines this container with another.
@@ -416,6 +446,31 @@ def _swap_batch_time(x: jax.Array) -> jax.Array:
   return jnp.swapaxes(x, 0, 1)
 
 
+def _scan_init(
+  core: RNNCore[InputT, StateT, OutputT, ResetT],
+  params: Params,
+  inputs: InputT,
+  prev_state: StateT,
+  is_reset: ResetT | None,
+  is_training: bool,
+) -> tuple[tuple[OutputT, StateT], Params]:
+  """Performs a single initialization step and expands output."""
+  # Slice inputs to time 0.
+  inputs_t0 = jax.tree.map(lambda x: x[:, 0], inputs)
+  reset_t0 = jax.tree.map(lambda x: jnp.ones_like(x[:, 0]), is_reset)
+
+  # Run one step to initialize parameters.
+  (out_t0, new_state), new_params = core.step(
+    params, inputs_t0, prev_state, reset_t0, is_training
+  )
+
+  # Get sequence length.
+  T = jax.tree.leaves(inputs)[0].shape[1]
+  outputs = jax.tree.map(lambda x: jnp.stack([x] * T, axis=1), out_t0)
+
+  return (outputs, new_state), new_params
+
+
 def static_scan(
   core: RNNCore[InputT, StateT, OutputT, ResetT],
   params: Params,
@@ -453,6 +508,9 @@ def static_scan(
     if x.ndim < 2:
       raise ValueError(f'Input leaves must have rank >= 2, got {x.ndim}.')
 
+  if not params.initialized:
+    return _scan_init(core, params, inputs, prev_state, is_reset, is_training)
+
   T = leaves[0].shape[1]
 
   outputs_list = []
@@ -470,7 +528,6 @@ def static_scan(
     outputs_list.append(out_t)
 
   outputs = jax.tree.map(lambda *args: jnp.stack(args, axis=1), *outputs_list)
-  # Cast outputs to OutputT because jax.tree.map return type inference is weak
   return (outputs, current_state), current_params
 
 
@@ -504,6 +561,9 @@ def dynamic_scan(
     if x.ndim < 2:
       raise ValueError(f'Input leaves must have rank >= 2, got {x.ndim}.')
 
+  if not params.initialized:
+    return _scan_init(core, params, inputs, prev_state, is_reset, is_training)
+
   # Swap to [Time, Batch, ...]
   inputs_t = jax.tree.map(_swap_batch_time, inputs)
   reset_scan = jax.tree.map(_swap_batch_time, is_reset)
@@ -523,7 +583,7 @@ def dynamic_scan(
   )
 
   outputs = jax.tree.map(_swap_batch_time, outputs_t)
-  return (cast(OutputT, outputs), final_state), final_params
+  return (outputs, final_state), final_params
 
 
 class Sequential(Module, Generic[InputT, StateT, OutputT, ResetT]):
@@ -575,7 +635,7 @@ class Sequential(Module, Generic[InputT, StateT, OutputT, ResetT]):
     Raises:
       ValueError: If inputs have rank < 1.
     """
-    for x in jax.tree_util.tree_leaves(inputs):
+    for x in jax.tree.leaves(inputs):
       if x.ndim < 1:
         raise ValueError('Input leaves must have at least rank 1 (Batch).')
 
@@ -588,10 +648,9 @@ class Sequential(Module, Generic[InputT, StateT, OutputT, ResetT]):
     )
 
     # Remove time dim: [B, 1, ...] -> [B, ...]
-    out = jax.tree.map(lambda x: x[:, 0], out_seq)
+    out = jax.tree.map(lambda x: x.squeeze(axis=1), out_seq)
 
-    # Mypy may need assurance that tree mapping preserves type structure
-    return (cast(OutputT, out), new_state), new_params
+    return (out, new_state), new_params
 
   def __call__(
     self,
@@ -668,20 +727,17 @@ class RNNCore(Sequential[InputT, StateT, OutputT, ResetT]):
       return prev_state
 
     # Generate a fresh initial state for this batch.
-    fresh_state, _ = self.initial_state(params, inputs)
+    initial_state, _ = self.initial_state(params, inputs)
 
-    def _reset_leaf(s: jax.Array, f: jax.Array) -> jax.Array:
-      try:
-        # Cast to Array to satisfy mypy strict mode which doesn't know
-        # if ResetT is a dict or an array here.
-        reset_arr = cast(jax.Array, is_reset)
-        r = jnp.reshape(reset_arr, (reset_arr.shape[0],) + (1,) * (s.ndim - 1))
-        return jnp.where(r, f, s)
-      except Exception:
-        # Fallback for when is_reset structure exactly matches the state.
-        return jnp.where(is_reset, f, s)
-
-    return cast(StateT, jax.tree.map(_reset_leaf, prev_state, fresh_state))
+    if isinstance(is_reset, jax.Array):
+      state = jax.tree.map(
+        lambda i, p, r=is_reset: jnp.where(r, i, p), initial_state, prev_state
+      )
+    else:
+      state = jax.tree.map(
+        lambda i, p, r: jnp.where(r, i, p), initial_state, prev_state, is_reset
+      )
+    return cast(StateT, state)
 
   def step(
     self,
@@ -740,26 +796,9 @@ class RNNCore(Sequential[InputT, StateT, OutputT, ResetT]):
     if prev_state is None:
       prev_state, params = self.initial_state(params, inputs)
 
-    for x in jax.tree_util.tree_leaves(inputs):
+    for x in jax.tree.leaves(inputs):
       if x.ndim < 2:
         raise ValueError('Input leaves must have rank >= 2.')
-
-    # Optimization: Perform safe initialization if needed.
-    if not params.initialized:
-      inputs_t0 = jax.tree.map(lambda x: x[:, 0], inputs)
-      reset_t0 = jax.tree.map(lambda x: x[:, 0], is_reset)
-
-      (out_t0, new_state), new_params = self.step(
-        params, inputs_t0, prev_state, reset_t0, is_training
-      )
-
-      # Expand output to match sequence length.
-      T = jax.tree_util.tree_leaves(inputs)[0].shape[1]
-      out_seq = jax.tree.map(
-        lambda x: jnp.broadcast_to(x[:, None], (x.shape[0], T) + x.shape[1:]),
-        out_t0,
-      )
-      return (out_seq, new_state), new_params
 
     if self.is_static:
       return static_scan(

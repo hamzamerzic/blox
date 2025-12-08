@@ -12,7 +12,7 @@ def test_linear_shapes():
   # Input has 5 features.
   x = jnp.ones((2, 5))
   # Initialize params with a seed.
-  params = bx.Params(0)
+  params = bx.Params(seed=0)
 
   y, params = layer(params, x)
 
@@ -39,7 +39,7 @@ def test_linear_learning():
   y_target = jnp.array([[5.0]])
 
   # Initialize params with a seed.
-  params = bx.Params(42)
+  params = bx.Params(seed=42)
 
   # Initialize.
   _, params = layer(params, x)

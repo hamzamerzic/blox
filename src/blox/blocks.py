@@ -12,6 +12,8 @@ import jax.numpy as jnp
 
 from . import interfaces as bx
 
+Initializer = jax.nn.initializers.Initializer
+
 
 class Linear(bx.Module):
   """A standard linear transformation layer.
@@ -24,8 +26,8 @@ class Linear(bx.Module):
     graph: bx.Graph,
     output_size: int,
     with_bias: bool = True,
-    w_init: bx.Initializer | None = None,
-    b_init: bx.Initializer | None = None,
+    w_init: Initializer | None = None,
+    b_init: Initializer | None = None,
   ) -> None:
     """Initializes the Linear module.
 
@@ -40,19 +42,19 @@ class Linear(bx.Module):
     self.output_size = output_size
     self.with_bias = with_bias
     self.w_init = w_init or jax.nn.initializers.lecun_normal()
-    self.b_init = b_init or jax.nn.initializers.zeros
+    self.b_init = b_init or jax.nn.initializers.constant(0.0)
 
   def __call__(
     self,
     params: bx.Params,
-    x: jax.Array,
+    inputs: jax.Array,
     precision: jax.lax.Precision | None = None,
   ) -> tuple[jax.Array, bx.Params]:
     """Applies the linear transformation.
 
     Args:
       params: The parameters container.
-      x: The input array. Must have at least one dimension.
+      inputs: The input array. Must have at least one dimension.
          Shape should be [..., input_features].
       precision: Optional precision for the matrix multiplication.
 
@@ -62,21 +64,21 @@ class Linear(bx.Module):
     Raises:
       ValueError: If the input is a scalar (rank 0).
     """
-    if not x.shape:
+    if not inputs.shape:
       raise ValueError('Input must not be scalar.')
 
-    input_size = x.shape[-1]
+    input_size = inputs.shape[-1]
     w, params = self.get_param(
       params, 'w', (input_size, self.output_size), self.w_init
     )
-    out = jnp.dot(x, w, precision=precision)
+    outputs = jnp.dot(inputs, w, precision=precision)
 
     if self.with_bias:
       b, params = self.get_param(params, 'b', (self.output_size,), self.b_init)
-      b = jnp.broadcast_to(b, out.shape)
-      out = out + b
+      b = jnp.broadcast_to(b, outputs.shape)
+      outputs = outputs + b
 
-    return out, params
+    return outputs, params
 
 
 class LSTMState(NamedTuple):
@@ -86,7 +88,7 @@ class LSTMState(NamedTuple):
   cell: jax.Array
 
 
-class LSTM(bx.RNNCore[jax.Array, LSTMState, jax.Array, jax.Array | None]):
+class LSTM(bx.RNNCore[jax.Array, LSTMState, jax.Array, jax.Array]):
   """Long Short-Term Memory (LSTM) Recurrent Neural Network.
 
   This module implements a standard LSTM cell. It inherits from RNNCore,
@@ -95,7 +97,10 @@ class LSTM(bx.RNNCore[jax.Array, LSTMState, jax.Array, jax.Array | None]):
   """
 
   def __init__(
-    self, graph: bx.Graph, hidden_size: int, is_static: bool = False
+    self,
+    graph: bx.Graph,
+    hidden_size: int,
+    is_static: bool = False,
   ) -> None:
     """Initializes the LSTM.
 
@@ -153,28 +158,29 @@ class LSTM(bx.RNNCore[jax.Array, LSTMState, jax.Array, jax.Array | None]):
     Raises:
       ValueError: If prev_state is None.
     """
+    del is_training  # Currently unused.
     if prev_state is None:
       raise ValueError('The LSTM step method requires a valid prev_state.')
 
-    # Apply reset mask if provided
+    # Apply reset mask if provided.
     prev_state = self.maybe_reset_state(params, prev_state, inputs, is_reset)
     prev_h, prev_c = prev_state.hidden, prev_state.cell
 
-    # Concatenate input and previous hidden state
+    # Concatenate input and previous hidden state.
     x_and_h = jnp.concatenate([inputs, prev_h], axis=-1)
 
-    # Project to gates
+    # Project to gates.
     gated, params = self.gates(params, x_and_h)
 
-    # Split into input, gate, forget, and output components
+    # Split into input, gate, forget, and output components.
     i, g, f, o = jnp.split(gated, indices_or_sections=4, axis=-1)
 
-    # Apply activations
-    f = jax.nn.sigmoid(f + 1.0)  # Forget bias initialized to 1.0
+    # Apply activations.
+    f = jax.nn.sigmoid(f)
     c = f * prev_c + jax.nn.sigmoid(i) * jnp.tanh(g)
     h = jax.nn.sigmoid(o) * jnp.tanh(c)
 
     new_state = LSTMState(hidden=h, cell=c)
 
-    # Output is h, state is (h, c)
+    # Output is h, state is (h, c).
     return (h, new_state), params

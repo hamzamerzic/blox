@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "blox"
+name = "jax-blox"
 version = "0.1.0"
 description = "A minimal, explicit, and functional neural network library for JAX."
 readme = "README.md"
