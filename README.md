@@ -225,7 +225,7 @@ Handling randomness in pure functional programming can be painful. Instead of ma
 
 **blox chooses clarity over brevity.**
 
-Most frameworks rely on implicit global state or thread-local contexts to hide parameters and RNG keys from users. While this makes simple use-cases trivial, it adds a lot of cognitive overhead for users further down the line, as users need to learn how to deal with the custom paradigms introduced simply to make JAX feel more like PyTorch. Not to mention the frustration when you need to debug a side-effect, use a transformation the framework wasn't designed for, or inspect the state mid-execution.
+Most frameworks rely on implicit global state or thread-local contexts to hide parameters and RNG keys from users. While this makes simple use-cases trivial, it adds a lot of cognitive overhead for users further down the line, as users need to learn how to deal with the custom paradigms introduced simply to make JAX feel more like PyTorch. Not to mention the frustration when you need to debug a side effect, use a transformation the framework wasn't designed for, or inspect the state mid-execution.
 
 | Standard Frameworks | blox |
 | :--- | :--- |
@@ -236,7 +236,7 @@ Most frameworks rely on implicit global state or thread-local contexts to hide p
 
 By accepting slightly more verbose function signatures, you gain:
 1.  **Total transparency:** You know exactly what data your function touches.
-2.  **JIT safety:** It is "impossible" to leak tracers or capture side-effects, as there is no global state.
+2.  **JIT safety:** It is "impossible" to leak tracers or capture side effects, as there is no global state.
 3.  **Performance:** The library compiles down to the exact same XLA kernels as raw JAX code.
 
 ## 📄 License
