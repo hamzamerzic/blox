@@ -16,11 +16,11 @@
 
 **blox** embraces JAX's functional paradigm instead of fighting it.
 
-Most JAX libraries try to make JAX feel like PyTorch, usually by introducing implicit global state, hidden contexts, or clever magic that seems helpful at first but eventually turns into unnecessary cognitive overhead and a steep learning curve.
+Most JAX libraries try to make JAX feel like PyTorch, usually by introducing implicit global state, hidden contexts, or clever magic that seems helpful at first but eventually results in unnecessary cognitive overhead and a steep learning curve.
 
-blox takes the opposite approach. Instead of hiding JAX, it leans into it building a minimal abstraction layer on top. By stripping away the "magic", such as implicit context managers and thread-local storage to hide parameters away from the user, **blox** ensures explicit data flow and keeps your code transparent, free of side-effects, and trivially compatible with JAX's powerful transformations.
+blox takes the opposite approach. Instead of hiding JAX, it leans into it, building a minimal abstraction layer on top. By stripping away the "magic", blox ensures explicit data flow and keeps your code transparent, free of side effects, and trivially compatible with JAX's powerful transformations.
 
-**No wrappers needed.** Because there is no hidden state, `jax.jit`, `jax.grad`, and `jax.vmap` work right out of the box.
+**No wrappers needed.** Because there is no hidden state, transformations like `jax.vmap`, `jax.jit`, and `jax.grad` work right out of the box.
 
 ## ⚡ Core Principles
 
