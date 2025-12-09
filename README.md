@@ -7,7 +7,9 @@
     <strong>A functional and lightweight neural network library for JAX.</strong>
   </p>
 
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="blox is released under the MIT license"></a><img src="https://img.shields.io/badge/python-3.10+-blue" alt="Python 3.10+"><img src="https://img.shields.io/badge/jax-0.4+-green" alt="JAX 0.4+">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="blox is released under the MIT license"></a>
+  <img src="https://img.shields.io/badge/python-3.10+-blue" alt="Python 3.10+">
+  <img src="https://img.shields.io/badge/jax-0.4+-green" alt="JAX 0.4+">
 </div>
 
 ---
