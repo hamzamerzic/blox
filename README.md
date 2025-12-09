@@ -232,7 +232,7 @@ Most frameworks rely on implicit global state or thread-local contexts to hide p
 | `out = layer(x)` | `out, params = layer(params, inputs)` |
 | Implicit global context | Explicit state passing |
 | Hidden variable scopes | Explicit `bx.Graph` paths |
-| Custom `jit` / `vmap`/`grad` wrappers | Standard `jax.jit` / `jax.vmap` / `jax.grad` |
+| Custom `vmap` / `jit` / `grad` wrappers | Standard `jax.vmap` / `jax.jit` / `jax.grad` |
 
 By accepting slightly more verbose function signatures, you gain:
 1.  **Total transparency:** You know exactly what data your function touches.
