@@ -4,30 +4,27 @@
   <h1>blox</h1>
   
   <p>
-    <strong>A lightweight, strictly functional neural network library for JAX.</strong>
+    <strong>A functional and lightweight neural network library for JAX.</strong>
   </p>
 
-  <a href="LICENSE">
-    <img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="blox is released under the MIT license">
-  </a>
-  <img src="https://img.shields.io/badge/python-3.10+-blue" alt="Python 3.10+">
-  <img src="https://img.shields.io/badge/jax-0.4+-green" alt="JAX 0.4+">
-
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="blox is released under the MIT license"></a><img src="https://img.shields.io/badge/python-3.10+-blue" alt="Python 3.10+"><img src="https://img.shields.io/badge/jax-0.4+-green" alt="JAX 0.4+">
 </div>
 
 ---
 
-**blox** embraces JAX's functional paradigm without the headache.
+**blox** embraces JAX's functional paradigm instead of fighting it.
 
-It provides a minimal, object-oriented layer solely for organizing your code, while strictly enforcing functional state management and explicit data flow. By stripping away the "magic" found in other frameworks—like implicit context managers, thread-local storage, and global state—**blox** ensures your code remains side-effect free, transparent, and trivially compatible with JAX's powerful transformations.
+Most JAX libraries try to make JAX feel like PyTorch, usually by introducing implicit global state, hidden contexts, or clever magic that seems helpful at first but eventually turns into unnecessary cognitive overhead and a steep learning curve.
+
+blox takes the opposite approach. Instead of hiding JAX, it leans into it building a minimal abstraction layer on top. By stripping away the "magic", such as implicit context managers and thread-local storage to hide parameters away from the user, **blox** ensures explicit data flow and keeps your code transparent, free of side-effects, and trivially compatible with JAX's powerful transformations.
 
 **No wrappers needed.** Because there is no hidden state, `jax.jit`, `jax.grad`, and `jax.vmap` work right out of the box.
 
 ## ⚡ Core Principles
 
-* **Functional purity:** Models are just stateless transformations. Parameters and RNG state are passed explicitly as arguments (`params`), never stored in `self`.
+* **Functional purity:** Models are just stateless transformations. Parameters are explicit arguments for every transformation and are never stored in global state or `self`.
 * **Explicit data flow:** No hidden global context. You can trace the path of every single tensor just by reading the function signature.
-* **Structural RNG:** Random keys are derived deterministically from the graph structure. Say goodbye to manually threading keys through every layer ("refactoring hell"); blox handles the math while keeping your functions pure.
+* **Structural RNG:** Random keys are simply part of the `Params` structure, like other trainable and non-trainable parameters. Since `Params` are handled in a functional manner, obtaining a new random key also returns new `Params`.
 * **Visualizable:** Comes with out-of-the-box **Treescope** integration for beautiful, interactive visualization of your model's architecture and parameters.
 
 ## 📦 Installation
@@ -42,7 +39,7 @@ pip install jax-blox
 
 ## 🚀 Quick Start
 
-In blox, a module is just a structural container (`__init__`) and a pure mathematical function (`__call__`).
+In blox, a module is just a structural container (`__init__`) and a set of pure mathematical functions (such as `__call__`).
 
 ### Define your layers
 
@@ -81,9 +78,9 @@ class CustomLinear(bx.Module):
 
 ### Composition & Dependency Injection
 
-Because **blox** modules are just standard Python objects, dependency injection is a breeze.
+Because **blox** modules are just standard Python objects, composing them via dependency injection is a breeze.
 
-Instead of hardcoding layers, you can create modules outside and pass them in. This changes the graph hierarchy: the injected module keeps its original path (it's a "sibling"), while internal layers become children.
+Instead of hardcoding layers, you can create modules outside and pass them in. The injected modules keep their original position in the hierarchy, while internal layers become children.
 
 ```python
 class CustomMLP(bx.Module):
@@ -113,7 +110,7 @@ class CustomMLP(bx.Module):
 
 ### Initialization & Visualization
 
-We cleanly separate the "Initialization phase" (traversing the graph to create parameters) from the "Runtime phase" (training the parameters).
+We cleanly separate the "Initialization phase", where we are simply traversing the graph to create parameters, from the "Runtime phase", where parameters (both trainable and non-trainable) are updated at each step.
 
 ```python
 # Define the structure for wiring modules.
@@ -127,17 +124,18 @@ model = CustomMLP(graph.child('mlp'), hidden_size=32, output_projection=readout)
 inputs = jnp.ones((1, 10))
 
 # Initialize the parameters.
-# Params start with an RNG seed that is used to initialize future parameters.
+# Params starts with an RNG seed that is used for parameter initialization.
 params = bx.Params(seed=42)
 
-# During initialization, parameters are added to Params.
+# During initialization, new parameters are added to Params. This can of course
+# be jitted to speed up things if necessary.
 unused_outputs, params = model(params, inputs)
 
-# Finalizing Params prevents further changes to the parameter structure
-# (like accidentally adding new parameters after initialization).
+# Finalizing Params prevents further changes to the parameter structure to
+# avoid accidentally adding new parameters.
 params = params.finalize()
 
-# Visualize the modules and parameters.
+# Graph and Params provide the full view of the network and can be visualized.
 bx.display(graph, params)
 ```
 
@@ -171,7 +169,7 @@ net: Graph # Param: 385 (1.5 KB)(
 
 The `Params` container holds *everything*: weights, RNG state, batch norm statistics, EMA moving averages, ...
 
-When training, we usually want to differentiate with respect to weights, but we still need to update the non-trainable state (like the RNG counter or batch statistics). **blox** makes this partitioning explicit.
+When training, we usually want to differentiate with respect to trainable parameters, such as weights, but we still need to update the non-trainable parameters (like the RNG counter or batch statistics). **blox** provides utilities to make parameter partitioning and merging simple and explicit.
 
 ```python
 @jax.jit
@@ -206,37 +204,37 @@ def train_step(params, inputs, targets):
 
 ## 🧠 Under the Hood (No Magic)
 
-blox is designed to be fully transparent. The "abstraction" is really just automated path handling to keep your code clean and your state pure.
+blox is designed to be fully transparent. The abstraction is really just automated path handling to keep your code clean and your state pure.
 
 **The Graph**
-This acts as a **Path Builder**. It is a lightweight object that represents a location in the model hierarchy (e.g., `net/mlp/dense1`). When you call `graph.child('name')`, it appends to the path. This ensures that every module has a unique address space for its variables.
+A lightweight object that represents a location in the model hierarchy (e.g., `net/mlp/dense1`). When you call `graph.child('name')`, it appends to the path. This ensures that every module has a unique address space for its variables.
 
 **The Params**
-This is a **Secure Vault**. It holds all weights, biases, and RNG states in a single, flat, immutable dictionary keyed by the paths generated by the Graph (e.g., `"net/mlp/dense1/w"`). It provides methods to partition state (for gradients) and merge it back (for updates).
+Holds all trainable and non-trainable parameters in a single, flat, immutable dictionary keyed by the paths generated by the Graph (e.g., `"net/mlp/dense1/w"`). Metadata can be attached to each parameter and blox provides methods to partition parameters, e.g. into trainable or non-trainable, for gradients, or based on the metadata defined by the user.
 
 **The RNG**
-Handling randomness in pure functional programming can be painful. Instead of manually threading `key` arguments through every single layer, `Params` maintains a master key and a counter.
-* When a module needs randomness (e.g., initialization or dropout), it asks `Params` for a key.
+Handling randomness in pure functional programming can be painful. Instead of manually threading `key` arguments through every single layer, `Params` maintains an initial seed and a counter.
+* When a module needs randomness (e.g., for initialization or dropout), it requests a new key from `Params`.
 * `Params` uses `jax.random.fold_in(master_key, counter)` to generate a deterministic, unique key for that specific call.
 * It increments the counter and returns a *new* `Params` object.
-* This guarantees that your model is mathematically reproducible and parallel-safe without the boilerplate.
+* This guarantees that your model is reproducible without the boilerplate.
 
 ## ⚖️ Why blox?
 
 **blox chooses clarity over brevity.**
 
-Most frameworks rely on implicit global state or thread-local contexts to save you from passing arguments. This works great until you need to debug a side-effect, use a transformation the framework wasn't designed for, or inspect the state mid-execution.
+Most frameworks rely on implicit global state or thread-local contexts to hide parameters and RNG keys from users. While this makes simple use-cases trivial, it adds a lot of cognitive overhead for users further down the line, as users need to learn how to deal with the custom paradigms introduced simply to make JAX feel more like PyTorch. Not to mention the frustration when you need to debug a side-effect, use a transformation the framework wasn't designed for, or inspect the state mid-execution.
 
 | Standard Frameworks | blox |
 | :--- | :--- |
 | `out = layer(x)` | `out, params = layer(params, inputs)` |
 | Implicit global context | Explicit state passing |
 | Hidden variable scopes | Explicit `bx.Graph` paths |
-| Custom `jit` / `vmap` wrappers | Standard `jax.jit` / `jax.vmap` |
+| Custom `jit` / `vmap`/`grad` wrappers | Standard `jax.jit` / `jax.vmap` / `jax.grad` |
 
 By accepting slightly more verbose function signatures, you gain:
 1.  **Total transparency:** You know exactly what data your function touches.
-2.  **JIT safety:** It is impossible to leak tracers or capture side-effects, as there is no global state.
+2.  **JIT safety:** It is "impossible" to leak tracers or capture side-effects, as there is no global state.
 3.  **Performance:** The library compiles down to the exact same XLA kernels as raw JAX code.
 
 ## 📄 License
