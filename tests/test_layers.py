@@ -21,10 +21,10 @@ def test_linear_shapes():
 
   # Check params existed.
   frozen = params.finalize()
-  # Path is 'root/linear/w' because graph was "root" -> child("linear").
-  # Note: Access .value because _data stores Variable objects.
-  w_shape = frozen._data['root/linear/w'].value.shape
-  b_shape = frozen._data['root/linear/b'].value.shape
+  # Path is ('root', 'linear', 'w') because graph was "root" -> child("linear").
+  # Note: Access .value because _data stores Param objects.
+  w_shape = frozen._data[('root', 'linear', 'w')].value.shape
+  b_shape = frozen._data[('root', 'linear', 'b')].value.shape
 
   assert w_shape == (5, 10)
   assert b_shape == (10,)
@@ -49,8 +49,8 @@ def test_linear_learning():
   @jax.jit
   def step(p):
     # Split params: We only want gradients for trainable weights.
-    #   The RNG state (and any frozen config) goes into 'non_trainable'.
-    trainable, non_trainable = p.partition(lambda _, v: v.trainable)
+    # The RNG state (and any non-trainable state) goes into 'non_trainable'.
+    trainable, non_trainable = p.split()
 
     def loss(t):
       # Merge back to run the model (model needs full state)

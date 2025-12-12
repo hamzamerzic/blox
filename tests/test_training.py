@@ -18,7 +18,7 @@ def test_rng_updates_during_training():
   params = bx.Params(seed=42)
 
   # Ensure the RNG counter starts at 0.
-  assert params._data['rng'].value[1] == 0
+  assert params._data[('rng', 'counter')].value == 0
 
   # Run the initialization pass to create weights.
   _, params = model(params, x)
@@ -26,14 +26,14 @@ def test_rng_updates_during_training():
   # NOW we finalize, to prevent accidental creation during training.
   params = params.finalize()
 
-  initial_counter = params._data['rng'].value[1]
+  initial_counter = params._data[('rng', 'counter')].value
 
   # The counter increments twice during init (once for weights, once for bias).
   assert initial_counter == 2
 
   @jax.jit
   def train_step(p, inputs, targets):
-    trainable, non_trainable = p.split_trainable()
+    trainable, non_trainable = p.split()
 
     def loss_fn(t, nt):
       full_p = t.merge(nt)
@@ -42,7 +42,7 @@ def test_rng_updates_during_training():
       pred, new_p = model(full_p, inputs)
 
       # Extract the updated non-trainable state.
-      _, new_nt = new_p.split_trainable()
+      _, new_nt = new_p.split()
 
       return jnp.mean((pred - targets) ** 2), new_nt
 
@@ -59,7 +59,7 @@ def test_rng_updates_during_training():
   new_params = train_step(params, x, y)
 
   # Ensure the counter state is preserved or updated correctly.
-  assert new_params._data['rng'].value[1] == initial_counter
+  assert new_params._data[('rng', 'counter')].value == initial_counter
 
   # Define a mock layer that consumes RNG during the forward pass.
   class MockDropout(bx.Module):
@@ -72,13 +72,13 @@ def test_rng_updates_during_training():
 
   @jax.jit
   def dropout_train_step(p, inputs):
-    t, nt = p.split_trainable()
+    t, nt = p.split()
 
     def loss(t_inner, nt_inner):
       full = t_inner.merge(nt_inner)
       # This call increments the internal RNG counter.
       _, new_full = dropout(full, inputs)
-      _, new_nt = new_full.split_trainable()
+      _, new_nt = new_full.split()
       return 0.0, new_nt
 
     _, new_nt_out = jax.grad(loss, has_aux=True)(t, nt)
@@ -88,4 +88,6 @@ def test_rng_updates_during_training():
   params_after_dropout = dropout_train_step(params, x)
 
   # Verify that the RNG counter has incremented from 1 to 2.
-  assert params_after_dropout._data['rng'].value[1] == initial_counter + 1
+  assert (
+    params_after_dropout._data[('rng', 'counter')].value == initial_counter + 1
+  )

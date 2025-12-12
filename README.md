@@ -20,7 +20,12 @@ Most JAX libraries try to make JAX feel like PyTorch, usually by introducing imp
 
 blox takes the opposite approach. Instead of hiding JAX, it leans into it, building a minimal abstraction layer on top. By stripping away the "magic", blox ensures explicit data flow and keeps your code transparent, free of side effects, and trivially compatible with JAX's powerful transformations.
 
-**No wrappers needed.** Because there is no hidden state, transformations like `jax.vmap`, `jax.jit`, and `jax.grad` work right out of the box.
+**Why blox?**
+
+- **Native JAX transforms work out of the box.** No wrappers needed—`jax.jit`, `jax.grad`, `jax.vmap`, and `jax.shard_map` just work.
+- **Lazy parameter initialization.** Define your model structure, then run a single forward pass to create all parameters automatically.
+- **Explicit state flow.** Every function returns `(output, params)`, making data dependencies crystal clear.
+- **Beautiful visualization.** Built-in Treescope integration to inspect your model's architecture and parameter shapes.
 
 ## ⚡ Core Principles
 
@@ -167,6 +172,64 @@ net: Graph # Param: 385 (1.5 KB)(
 )
 ```
 
+## 🔀 Parallel Execution (vmap & shard_map)
+
+When using `jax.vmap` or `jax.shard_map`, you often want different batch elements or devices to have different random numbers (e.g., for dropout). The RNG key in Params is typically **replicated** across devices. By default, all devices would produce identical random values.
+
+**blox** solves this with `fold_in_axes()` and `fold_out_axes()`:
+
+```python
+def apply_model(params, x):
+  # Create a local key that incorporates the device/batch index.
+  params = params.fold_in_axes('batch')
+  out, params = dropout(params, x, is_training=True)
+  # Remove local key before returning (restores pytree metadata).
+  return out, params.fold_out_axes('batch')
+
+# Use with vmap - each batch element gets unique dropout mask.
+batched_apply = jax.vmap(apply_model, axis_name='batch')
+```
+
+Both methods are **no-ops outside transformations**, so the same function works for `eval_shape` (to get output structure) and actual execution inside `shard_map`.
+
+## 🏷️ Parameter Metadata & Sharding
+
+Parameters can carry metadata for features like model parallelism:
+
+```python
+linear = bx.Linear(
+  graph / 'linear',
+  output_size=1024,
+  w_metadata={'sharding': (None, 'model')},  # Shard output dim across 'model' mesh axis.
+  b_metadata={'sharding': ('model',)},
+)
+```
+
+To use with `jax.jit` sharding, extract partition specs from the params:
+
+```python
+from jax.sharding import NamedSharding, PartitionSpec as P
+
+def get_shardings(mesh, params):
+  def to_sharding(param):
+    if isinstance(param, bx.Param) and param.sharding:
+      return NamedSharding(mesh, P(*param.sharding))
+    return NamedSharding(mesh, P())
+  return jax.tree.map(to_sharding, params, is_leaf=lambda x: isinstance(x, bx.Param))
+
+# Shard params across devices.
+mesh = jax.make_mesh((4,), ('model',))
+shardings = get_shardings(mesh, params)
+sharded_params = jax.device_put(params, shardings)
+
+# JIT with output sharding.
+@jax.jit
+def forward(params, x):
+  return linear(params, x)
+
+out, _ = forward(sharded_params, x)
+```
+
 ## ⚡ Training (JIT & Gradients)
 
 The `Params` container holds *everything*: weights, RNG state, batch norm statistics, EMA moving averages, ...
@@ -179,7 +242,7 @@ def train_step(params, inputs, targets):
   # Split params into two sets.
   # Trainable: weights, biases (we want gradients for these).
   # Non-trainable: RNG, batch stats, EMA (we just want the updated values).
-  trainable, non_trainable = params.split_trainable()
+  trainable, non_trainable = params.split()
 
   def loss_fn(t, nt):
     # Merge parameters to run the forward pass.
@@ -189,7 +252,7 @@ def train_step(params, inputs, targets):
     loss = jnp.mean((predictions - targets) ** 2)
 
     # Extract the updated non-trainable state to pass it out.
-    _, new_non_trainable = new_params.split_trainable()
+    _, new_non_trainable = new_params.split()
     return loss, new_non_trainable
 
   # Calculate gradients and capture the auxiliary state.

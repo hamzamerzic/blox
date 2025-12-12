@@ -8,28 +8,28 @@ from typing import Any
 
 import treescope
 
-from .interfaces import Graph, Module, Params, Variable
+from .interfaces import Graph, Module, Param, Params
 
 
 class Leaf:
-  """Visual wrapper for variables."""
+  """Visual wrapper for params."""
 
-  def __init__(self, var: Variable) -> None:
-    self.var = var
+  def __init__(self, param: Param) -> None:
+    self.param = param
 
   def __treescope_repr__(self, path: str, subtree_renderer: Any) -> Any:
     attr = {}
 
-    if hasattr(self.var.value, 'shape'):
-      attr['shape'] = self.var.value.shape
-      attr['dtype'] = str(self.var.value.dtype)
+    if hasattr(self.param.value, 'shape'):
+      attr['shape'] = self.param.value.shape
+      attr['dtype'] = str(self.param.value.dtype)
 
-    if self.var.metadata:
-      attr['metadata'] = self.var.metadata
+    if self.param.metadata:
+      attr['metadata'] = self.param.metadata
 
-    attr['value'] = self.var.value
+    attr['value'] = self.param.value
 
-    status = '[T]' if self.var.trainable else '[N]'
+    status = '[T]' if self.param.trainable else '[N]'
 
     return treescope.repr_lib.render_object_constructor(
       object_type=type(f'Param{status}', (), {}),
@@ -43,13 +43,15 @@ class Leaf:
 class Link:
   """Visual wrapper for dependency paths."""
 
-  def __init__(self, path: str) -> None:
+  def __init__(self, path: tuple[str, ...]) -> None:
     self.path = path
 
   def __treescope_repr__(self, path: str, subtree_renderer: Any) -> Any:
+    # Format tuple path as string for display.
+    path_str = '/'.join(self.path)
     return treescope.repr_lib.render_object_constructor(
       object_type=type(self),
-      attributes={'path': self.path},
+      attributes={'path': path_str},
       path=path,
       subtree_renderer=subtree_renderer,
       roundtrippable=False,
@@ -63,7 +65,7 @@ class NodeView:
     self,
     typename: str,
     config: dict[str, Any],
-    params: dict[str, Variable],
+    params: dict[str, Param],
     modules: dict[str, NodeView],
   ) -> None:
     self.typename = typename
@@ -122,20 +124,22 @@ class NodeView:
 
 def _view(graph: Graph, params: Params, is_root: bool = True) -> NodeView:
   """Internal helper to recursively build the NodeView."""
-  prefix = f'{graph.path}/' if graph.path else ''
-
   my_params = {}
   # Access private data for visualization purposes.
   # pylint: disable=protected-access
   for key, value in params._data.items():
-    if key.startswith(prefix) or (not prefix and key):
-      local_name = key[len(prefix) :]
-      if '/' not in local_name:
-        my_params[local_name] = value
+    # Check if this param belongs to this graph node (direct child).
+    # key is a tuple like ('root', 'linear', 'w')
+    # graph.path is a tuple like ('root', 'linear')
+    # We want params where key[:-1] == graph.path (the param's parent is this node)
+    if len(key) > 0 and key[:-1] == graph.path:
+      param_name = key[-1]
+      my_params[param_name] = value
 
   # Special case: If we are at the root, show the rng variable.
-  if is_root and 'rng' in params._data:
-    my_params['rng'] = params._data['rng']
+  rng_key = ('rng',)
+  if is_root and rng_key in params._data:
+    my_params['rng'] = params._data[rng_key]
 
   my_modules = {}
   for name, child_node in graph._children.items():

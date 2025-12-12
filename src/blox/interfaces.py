@@ -24,6 +24,7 @@ import jax.numpy as jnp
 
 Shape = tuple[int, ...]
 Initializer = jax.nn.initializers.Initializer
+Path = tuple[str, ...]
 
 InputT = TypeVar('InputT', bound=chex.ArrayTree)
 StateT = TypeVar('StateT', bound=chex.ArrayTree)
@@ -32,16 +33,30 @@ ResetT = TypeVar('ResetT', bound=chex.ArrayTree)
 
 
 # ==============================================================================
-# Graph & Variable
+# Graph & Param
 # ==============================================================================
 
 
 class Graph:
-  """Defines the hierarchical structure of the model.
+  """The structural graph of a model.
 
-  The Graph object acts as a 'path builder'. It does not store parameters directly
-  but constructs unique string paths (e.g., "root/layer1/bias") that are used
-  by the Params container to retrieve state.
+  A Graph represents the hierarchical structure of your model. Each node in the
+  graph corresponds to a module (layer), and edges represent the parent-child
+  relationships between them. When you create a child node with `graph.child()`,
+  you're extending this structure.
+
+  The graph serves two purposes:
+  1. It defines how your model is organized - which modules contain which.
+  2. It provides unique namespaces for parameters. Each node's path (e.g.,
+     ('net', 'encoder', 'dense')) becomes the prefix for that module's params.
+
+  Dependency injection creates additional relationships in the graph. When a
+  module is created externally and passed into another, it retains its original
+  position in the graph (as a sibling rather than a child), enabling flexible
+  parameter sharing patterns.
+
+  The graph does not store parameters - that's the job of the Params container.
+  Graph defines structure; Params holds state.
   """
 
   def __init__(self, name: str) -> None:
@@ -56,7 +71,7 @@ class Graph:
     if not name:
       raise ValueError('Graph node must have a name.')
     self.name = name
-    self.path = name
+    self.path: Path = (name,)
     self._children: dict[str, Graph] = {}
     # Metadata storage for visualization or auxiliary info.
     self.metadata: dict[str, Any] = {}
@@ -103,18 +118,27 @@ class Graph:
     return self.child(name)
 
   def _set_parent(self, parent: Graph) -> None:
-    self.path = f'{parent.path}/{self.name}'
+    self.path = parent.path + (self.name,)
     # This node is now part of a hierarchy, so it is no longer a root.
     self._is_root = False
 
+  def __repr__(self) -> str:
+    n_children = len(self._children)
+    path_str = '/'.join(self.path)
+    if n_children == 0:
+      return f"Graph('{path_str}')"
+    return f"Graph('{path_str}', children={n_children})"
 
-class Variable:
+
+class Param:
   """A wrapper around a parameter value that holds metadata.
 
   Attributes:
     value: The actual JAX array or PyTree stored.
     trainable: Boolean flag indicating if gradients should be computed.
-    metadata: Dictionary for arbitrary tags (e.g., 'rng', 'optimizer_state').
+    metadata: Dictionary for arbitrary tags. Common keys include:
+      - 'sharding': tuple of axis names (e.g., (None, 'model')) for partitioning
+      - 'tag': string identifier (e.g., 'rng', 'optimizer_state')
   """
 
   def __init__(
@@ -127,14 +151,19 @@ class Variable:
     self.trainable = trainable
     self.metadata = metadata or {}
 
-  def replace(self, **updates: Any) -> Variable:
-    """Creates a new Variable with updated fields.
+  @property
+  def sharding(self) -> tuple[str | None, ...] | None:
+    """Returns the sharding spec from metadata, if present."""
+    return self.metadata.get('sharding')
+
+  def replace(self, **updates: Any) -> Param:
+    """Creates a new Param with updated fields.
 
     Args:
       **updates: Keyword arguments matching the attribute names to update.
 
     Returns:
-      A new Variable instance.
+      A new Param instance.
     """
     current = {
       'value': self.value,
@@ -142,22 +171,33 @@ class Variable:
       'metadata': self.metadata,
     }
     current.update(updates)
-    return Variable(**current)
+    return Param(**current)
 
-  def tree_flatten(self) -> tuple[tuple[Any], tuple[bool, dict[str, Any]]]:
-    """Flattens the variable for JAX pytree registration."""
+  def tree_flatten(
+    self,
+  ) -> tuple[tuple[Any], tuple[bool, dict[str, Any]]]:
+    """Flattens the param for JAX pytree registration."""
     return (self.value,), (self.trainable, self.metadata)
 
   @classmethod
   def tree_unflatten(
-    cls, aux: tuple[bool, dict[str, Any]], children: tuple[Any]
-  ) -> Variable:
-    """Unflattens the variable for JAX pytree registration."""
+    cls,
+    aux: tuple[bool, dict[str, Any]],
+    children: tuple[Any],
+  ) -> Param:
+    """Unflattens the param for JAX pytree registration."""
     return cls(children[0], trainable=aux[0], metadata=aux[1])
+
+  def __repr__(self) -> str:
+    status = 'T' if self.trainable else 'N'
+    parts = [f'value={self.value!r}']
+    if self.metadata:
+      parts.append(f'metadata={self.metadata}')
+    return f'Param[{status}]({", ".join(parts)})'
 
 
 jax.tree_util.register_pytree_node(
-  Variable, Variable.tree_flatten, Variable.tree_unflatten
+  Param, Param.tree_flatten, Param.tree_unflatten
 )
 
 
@@ -165,9 +205,12 @@ class Params:
   """Immutable container for variables and RNG state.
 
   This class manages the functional state of the model. It handles:
-  1. Parameter storage and retrieval via string paths.
+  1. Parameter storage and retrieval via tuple paths.
   2. Deterministic RNG key splitting.
   3. Partitioning state for JIT compilation (trainable vs non-trainable).
+
+  For sharded/vmapped code, use fold_in_axes() at the start of the function
+  to get device-unique RNG keys while keeping the master key replicated.
   """
 
   def __init__(self, *, seed: int | jax.Array) -> None:
@@ -176,20 +219,23 @@ class Params:
     Args:
       seed: An integer seed or a JAX random key.
     """
-    self._data: dict[str, Variable] = {}
+    self._data: dict[Path, Param] = {}
     self._initialized: bool = False
+    # Tracks which axes have been folded in (ordered tuple for determinism).
+    # Part of pytree metadata, restored on unflatten.
+    self._folded_axes: tuple[str, ...] = ()
+    # Local key derived from master key + folded axes. None until fold_in_axes.
+    self._folded_key: jax.Array | None = None
 
     if isinstance(seed, int):
       key = jax.random.key(seed)
     else:
       key = seed
 
-    # Counter is a uint32 that increments on every consumption.
-    rng_val = (key, jnp.array(0, dtype=jnp.uint32))
-
-    # RNG is stored publicly as 'rng'.
-    self._data['rng'] = Variable(
-      rng_val, trainable=False, metadata={'tag': 'rng'}
+    # Store RNG key and counter as separate Params for clean pytree structure.
+    self._data[('rng', 'key')] = Param(key, trainable=False)
+    self._data[('rng', 'counter')] = Param(
+      jnp.array(0, dtype=jnp.uint32), trainable=False
     )
 
   @property
@@ -197,11 +243,161 @@ class Params:
     """Returns True if the parameter initialization has been finalized."""
     return self._initialized
 
+  def __repr__(self) -> str:
+    n_vars = len(self._data)
+    status = 'initialized' if self._initialized else 'uninitialized'
+    return f'Params({n_vars} variables, {status})'
+
+  def fold_in_axes(self, *axis_names: str) -> 'Params':
+    """Folds axis indices into the RNG for device-unique randomness.
+
+    Call this at the start of a shard_map or vmap function to get different
+    RNG keys on each device/batch element. The master key stays replicated,
+    but subsequent next_key() calls will produce device-unique keys.
+
+    Folding is idempotent per axis - folding the same axis twice has no effect.
+    Axes are folded in order, which affects the resulting key.
+
+    Use fold_out_axes() to explicitly unfold axes before returning from shard_map.
+
+    Args:
+      *axis_names: Axis names to fold in (e.g., 'model', 'batch').
+
+    Returns:
+      A new Params with the axes folded in.
+
+    Raises:
+      ValueError: If an axis doesn't exist in the current context.
+
+    Example:
+      @jax.shard_map(mesh=mesh, in_specs=P(), out_specs=param_specs)
+      def init_sharded(x):
+        params = bx.Params(seed=42).fold_in_axes('model')
+        _, params = model(params, x)
+        return params.fold_out_axes('model').finalize()
+    """
+    if not axis_names:
+      return self
+
+    # Check if axes exist using JAX internal API.
+    current_axes = jax.core.unsafe_get_axis_names_DO_NOT_USE()
+
+    # If no axes are active (e.g., outside shard_map), silently skip.
+    # This allows the same code to work both inside and outside shard_map.
+    if not current_axes:
+      return self
+
+    # Validate all axes exist.
+    for axis_name in axis_names:
+      if axis_name not in current_axes:
+        raise ValueError(
+          f"Axis '{axis_name}' not found. Available axes: {current_axes}. "
+          f'Make sure fold_in_axes is called inside shard_map/vmap with this axis.'
+        )
+
+    # Fold in each axis sequentially.
+    result = self
+    for axis_name in axis_names:
+      if axis_name in result._folded_axes:
+        continue  # Already folded, skip.
+
+      # Compute new folded key by folding in the axis index.
+      base_key = (
+        result._folded_key
+        if result._folded_key is not None
+        else result._data[('rng', 'key')].value
+      )
+      axis_idx = jax.lax.axis_index(axis_name)
+      new_folded_key = jax.random.fold_in(base_key, axis_idx)
+
+      new_p = result._clone()
+      new_p._folded_axes = result._folded_axes + (axis_name,)
+      new_p._folded_key = new_folded_key
+      result = new_p
+
+    return result
+
+  def fold_out_axes(self, *axis_names: str) -> 'Params':
+    """Unfolds axis indices from the RNG, reverting to outer context.
+
+    Call this before returning from shard_map/vmap to ensure pytree metadata
+    matches between eval_shape (outside) and actual execution (inside).
+
+    The axes to unfold must be at the end of the folded axes stack. The order
+    of axes in the call doesn't matter, but they must all be at the tail.
+
+    Args:
+      *axis_names: Axis names to unfold. Must be at the end of _folded_axes.
+
+    Returns:
+      A new Params with the axes unfolded.
+
+    Raises:
+      ValueError: If axes are not at the end of the folded axes stack.
+
+    Example:
+      @jax.shard_map(mesh=mesh, in_specs=P(), out_specs=param_specs)
+      def apply_sharded(params, x):
+        params = params.fold_in_axes('model')
+        out, params = model(params, x)
+        return out, params.fold_out_axes('model')
+    """
+    if not axis_names:
+      return self
+
+    # If no axes are active (outside shard_map), silently skip.
+    current_axes = jax.core.unsafe_get_axis_names_DO_NOT_USE()
+    if not current_axes:
+      return self
+
+    # Validate axes are in folded_axes.
+    axes_set = set(axis_names)
+    for axis_name in axis_names:
+      if axis_name not in self._folded_axes:
+        raise ValueError(
+          f"Axis '{axis_name}' is not folded. Current folded axes: "
+          f'{self._folded_axes}'
+        )
+
+    # Validate axes form the tail of the stack.
+    n_to_remove = len(axes_set)
+    tail_axes = set(self._folded_axes[-n_to_remove:])
+    if axes_set != tail_axes:
+      raise ValueError(
+        f'Axes {axis_names} must be at the end of folded axes stack. '
+        f'Current stack: {self._folded_axes}. '
+        f'Tail axes: {tail_axes}'
+      )
+
+    # Remove axes from the end.
+    new_folded_axes = self._folded_axes[:-n_to_remove]
+
+    # Recompute folded_key from remaining axes.
+    new_p = self._clone()
+    new_p._folded_axes = ()
+    new_p._folded_key = None
+
+    # Re-fold remaining axes.
+    for axis_name in new_folded_axes:
+      base_key = (
+        new_p._folded_key
+        if new_p._folded_key is not None
+        else new_p._data[('rng', 'key')].value
+      )
+      axis_idx = jax.lax.axis_index(axis_name)
+      new_p._folded_key = jax.random.fold_in(base_key, axis_idx)
+      new_p._folded_axes = new_p._folded_axes + (axis_name,)
+
+    return new_p
+
   def next_key(self) -> tuple[jax.Array, Params]:
     """Generates a new key and increments the internal counter.
 
     This ensures functional purity. The method returns a new key and a *new*
     Params container with the updated counter.
+
+    If fold_in_axes() was called, the generated key will be derived from
+    the folded key, producing device-unique keys inside shard_map/vmap.
 
     Returns:
       A tuple containing (new_key, new_params_container).
@@ -209,22 +405,31 @@ class Params:
     Raises:
       ValueError: If the 'rng' state is missing.
     """
-    if 'rng' not in self._data:
-      raise ValueError('Params container must contain an RNG state.')
+    key_path = ('rng', 'key')
+    counter_path = ('rng', 'counter')
 
-    rng_var = self._data['rng']
-    master_key, counter = rng_var.value
+    if key_path not in self._data or counter_path not in self._data:
+      raise ValueError('Params container must contain RNG state.')
+
+    # Use folded key if available, otherwise master key.
+    base_key = (
+      self._folded_key
+      if self._folded_key is not None
+      else self._data[key_path].value
+    )
+    counter = self._data[counter_path].value
 
     # Generate deterministic key based on current counter.
-    new_key = jax.random.fold_in(master_key, counter)
+    new_key = jax.random.fold_in(base_key, counter)
 
     # Increment counter.
     new_counter = counter + 1
-    new_rng_var = rng_var.replace(value=(master_key, new_counter))
 
     # Return updated container.
     new_p = self._clone()
-    new_p._data['rng'] = new_rng_var
+    new_p._data[counter_path] = self._data[counter_path].replace(
+      value=new_counter
+    )
     return new_key, new_p
 
   def get(
@@ -246,7 +451,8 @@ class Params:
       initializer: Function to initialize the parameter.
       dtype: The data type.
       trainable: Whether the parameter is trainable.
-      metadata: Optional metadata dictionary.
+      metadata: Optional metadata dictionary. Common keys include:
+        - 'sharding': tuple of mesh axis names (e.g., (None, 'model'))
 
     Returns:
       A tuple containing (parameter_value, new_params_container).
@@ -254,7 +460,7 @@ class Params:
     Raises:
       KeyError: If parameters are finalized and the key is missing.
     """
-    full_path = f'{graph.path}/{name}'
+    full_path = graph.path + (name,)
 
     # Check for existing parameter.
     if full_path in self._data:
@@ -262,24 +468,25 @@ class Params:
 
     # Check against adding new params if finalized.
     if self._initialized:
-      raise KeyError(f"Parameter '{full_path}' is missing.")
+      path_str = '/'.join(full_path)
+      raise KeyError(f"Parameter '{path_str}' is missing.")
 
     # Consume RNG to generate a fresh key.
     key, new_p = self.next_key()
 
     # Initialize the new value.
     val = initializer(key, shape, dtype)
-    var = Variable(val, trainable=trainable, metadata=metadata)
+    var = Param(val, trainable=trainable, metadata=metadata)
 
     # Store the variable.
     new_p._data[full_path] = var
     return val, new_p
 
-  def set(self, path: str, value: Any) -> Params:
+  def set(self, path: Path, value: Any) -> Params:
     """Updates the value of an existing parameter.
 
     Args:
-      path: The full path string of the parameter.
+      path: The full path tuple of the parameter, e.g. ('net', 'linear', 'w').
       value: The new value (must match the dtype of the existing variable).
 
     Returns:
@@ -289,7 +496,8 @@ class Params:
       KeyError: If the path does not exist.
     """
     if path not in self._data:
-      raise KeyError(f"Path '{path}' not found.")
+      path_str = '/'.join(path)
+      raise KeyError(f"Path '{path_str}' not found.")
 
     current_var = self._data[path]
     val_arr = jnp.array(value, dtype=current_var.value.dtype)
@@ -299,42 +507,45 @@ class Params:
     new_p._data[path] = new_var
     return new_p
 
-  def partition(
-    self, predicate: Callable[[str, Variable], bool]
+  def split(
+    self, predicate: Callable[[Path, str, Param], bool] | None = None
   ) -> tuple[Params, Params]:
-    """Splits params into two containers based on the predicate.
+    """Splits params into two containers based on a predicate.
 
-    Useful for separating trainable weights from statistics (e.g. Batch Norm)
-    or RNG state before passing to an optimizer.
+    When called without arguments, splits by trainable flag
+    (trainable vs non-trainable) otherwise splits by the provided predicate.
 
     Args:
-      predicate: A function taking (path, variable) and returning bool.
+      predicate: Optional function taking (module_path, param_name, param)
+        and returning bool. module_path is a tuple like ('net', 'encoder'),
+        param_name is the variable name like 'w'. If None, defaults to
+        splitting by trainable flag.
 
     Returns:
-      A tuple (true_params, false_params).
+      A tuple (matching_params, non_matching_params).
     """
-    t_data, f_data = {}, {}
-    for path, var in self._data.items():
-      if predicate(path, var):
-        t_data[path] = var
+
+    def _default_predicate(_path: Path, _name: str, p: Param) -> bool:
+      return p.trainable
+
+    if predicate is None:
+      predicate = _default_predicate
+
+    t_data: dict[Path, Param] = {}
+    f_data: dict[Path, Param] = {}
+    for full_path, param in self._data.items():
+      # Split full_path tuple into module_path and param_name.
+      module_path = full_path[:-1]
+      param_name = full_path[-1]
+
+      if predicate(module_path, param_name, param):
+        t_data[full_path] = param
       else:
-        f_data[path] = var
+        f_data[full_path] = param
 
     t, f = self._clone(), self._clone()
     t._data, f._data = t_data, f_data
     return t, f
-
-  def split_trainable(self) -> tuple[Params, Params]:
-    """Splits the parameters into trainable and non-trainable sets.
-
-    This is a convenience wrapper around `partition` specifically for training.
-    The first return value contains all parameters where `trainable=True`.
-    The second contains everything else (including RNG state).
-
-    Returns:
-      A tuple (trainable_params, non_trainable_params).
-    """
-    return self.partition(lambda p, v: v.trainable)
 
   def merge(self, other: Params) -> Params:
     """Combines this container with another.
@@ -368,21 +579,52 @@ class Params:
     p = cast(Params, object.__new__(Params))
     p._data = self._data.copy()
     p._initialized = self._initialized
+    p._folded_axes = self._folded_axes
+    p._folded_key = self._folded_key
     return p
 
-  def tree_flatten(self) -> tuple[tuple[dict[str, Variable]], bool]:
-    """Flattens the container for JAX pytree registration."""
-    return (self._data,), self._initialized
+  def tree_flatten(
+    self,
+  ) -> tuple[tuple[dict[Path, Param]], tuple[bool, tuple[str, ...]]]:
+    """Flattens the container for JAX pytree registration.
+
+    Note: folded_key is NOT included as a child. It will be reconstructed
+    on unflatten from the folded_axes metadata.
+    """
+    return (self._data,), (self._initialized, self._folded_axes)
 
   @classmethod
   def tree_unflatten(
-    cls, aux: bool, children: tuple[dict[str, Variable]]
+    cls,
+    aux: tuple[bool, tuple[str, ...]],
+    children: tuple[dict[Path, Param]],
   ) -> Params:
-    """Unflattens the container for JAX pytree registration."""
-    # We must cast the raw object to Params.
+    """Unflattens the container for JAX pytree registration.
+
+    Restores the params state as-is. Users are responsible for explicitly
+    calling fold_out_axes() before returning from shard_map/vmap.
+    """
     p = cast(Params, object.__new__(cls))
     p._data = children[0]
-    p._initialized = aux
+    p._initialized = aux[0]
+    p._folded_axes = aux[1]
+
+    # Reconstruct folded_key if there are folded axes.
+    if p._folded_axes:
+      current_axes = jax.core.unsafe_get_axis_names_DO_NOT_USE()
+      if current_axes:
+        # Re-fold each axis to reconstruct folded_key.
+        base_key = p._data[('rng', 'key')].value
+        for axis_name in p._folded_axes:
+          axis_idx = jax.lax.axis_index(axis_name)
+          base_key = jax.random.fold_in(base_key, axis_idx)
+        p._folded_key = base_key
+      else:
+        # Outside transformation, can't reconstruct folded_key.
+        p._folded_key = None
+    else:
+      p._folded_key = None
+
     return p
 
 
@@ -477,7 +719,8 @@ class Module:
       initializer: The initialization function.
       dtype: The data type.
       trainable: Whether the parameter is trainable.
-      metadata: Optional metadata.
+      metadata: Optional metadata dictionary. Common keys include:
+        - 'sharding': tuple of mesh axis names (e.g., (None, 'model'))
 
     Returns:
       A tuple containing (parameter_value, new_params_container).
