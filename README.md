@@ -174,9 +174,11 @@ net: Graph # Param: 385 (1.5 KB)(
 
 ## 🔀 Parallel Execution (vmap & shard_map)
 
-When using `jax.vmap` or `jax.shard_map`, you often want different batch elements or devices to have different random numbers (e.g., for dropout). The RNG key in Params is typically **replicated** across devices. By default, all devices would produce identical random values.
+When using `jax.vmap` or `jax.shard_map`, you often want different batch elements or devices to have different random numbers (e.g., for dropout). Without special handling, all devices get the same RNG key and produce **identical random values**—a subtle bug that can silently break your training.
 
-**blox** solves this with `fold_in_axes()` and `fold_out_axes()`:
+The RNG key in Params should be **replicated** across devices. This makes sense because the key is just a seed—the actual randomness comes from combining it with the counter, which increments with each `next_key()` call. Replicating ensures all devices stay in sync.
+
+**blox** solves the per-device randomness problem with `fold_in_axes()` and `fold_out_axes()`:
 
 ```python
 def apply_model(params, x):
@@ -186,8 +188,8 @@ def apply_model(params, x):
   # Remove local key before returning (restores pytree metadata).
   return out, params.fold_out_axes('batch')
 
-# Use with vmap - each batch element gets unique dropout mask.
-batched_apply = jax.vmap(apply_model, axis_name='batch')
+# Use with vmap - params are replicated (in_axes=None), each batch element gets unique dropout.
+batched_apply = jax.vmap(apply_model, in_axes=(None, 0), out_axes=(0, None), axis_name='batch')
 ```
 
 Both methods are **no-ops outside transformations**, so the same function works for `eval_shape` (to get output structure) and actual execution inside `shard_map`.
@@ -205,7 +207,7 @@ linear = bx.Linear(
 )
 ```
 
-To use with `jax.jit` sharding, extract partition specs from the params:
+To use with `jax.jit` sharding, extract shardings from the params metadata:
 
 ```python
 from jax.sharding import NamedSharding, PartitionSpec as P
@@ -217,17 +219,19 @@ def get_shardings(mesh, params):
     return NamedSharding(mesh, P())
   return jax.tree.map(to_sharding, params, is_leaf=lambda x: isinstance(x, bx.Param))
 
-# Shard params across devices.
+# Create mesh (assumes 4 devices).
 mesh = jax.make_mesh((4,), ('model',))
 shardings = get_shardings(mesh, params)
+
+# Distribute params across devices.
 sharded_params = jax.device_put(params, shardings)
 
-# JIT with output sharding.
-@jax.jit
+# JIT with explicit input sharding.
+@functools.partial(jax.jit, in_shardings=(shardings, None))
 def forward(params, x):
   return linear(params, x)
 
-out, _ = forward(sharded_params, x)
+out, new_params = forward(sharded_params, x)
 ```
 
 ## ⚡ Training (JIT & Gradients)
