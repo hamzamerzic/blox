@@ -1,6 +1,7 @@
 import jax
 import jax.numpy as jnp
 import blox as bx
+import chex
 
 
 def test_rng_updates_during_training():
@@ -90,4 +91,116 @@ def test_rng_updates_during_training():
   # Verify that the RNG counter has incremented from 1 to 2.
   assert (
     params_after_dropout._data[('rng', 'counter')].value == initial_counter + 1
+  )
+
+
+def test_checkpoint_produces_correct_gradients():
+  """Verifies that jax.checkpoint works correctly with blox modules.
+
+  jax.checkpoint (remat) trades compute for memory by recomputing activations
+  during the backward pass. This test ensures gradients match between
+  checkpointed and non-checkpointed versions.
+  """
+  graph = bx.Graph('root')
+  layer1 = bx.Linear(graph.child('layer1'), output_size=16)
+  layer2 = bx.Linear(graph.child('layer2'), output_size=8)
+
+  def forward(p, inputs):
+    h, p = layer1(p, inputs)
+    h = jax.nn.relu(h)
+    out, p = layer2(p, h)
+    return out, p
+
+  x = jnp.ones((4, 8))
+  y = jnp.ones((4, 8))
+
+  # Initialize params by running forward.
+  params = bx.Params(seed=42)
+  _, params = forward(params, x)
+  params = params.finalize()
+
+  # Checkpoint the entire forward pass.
+  forward_checkpointed = jax.checkpoint(forward)
+
+  trainable, non_trainable = params.split()
+
+  # Compute gradients without checkpoint.
+  def loss_fn(t, nt, inputs, targets):
+    p = t.merge(nt)
+    pred, _ = forward(p, inputs)
+    return jnp.mean((pred - targets) ** 2)
+
+  grads_normal = jax.grad(loss_fn)(trainable, non_trainable, x, y)
+
+  # Compute gradients with checkpoint.
+  def loss_fn_checkpointed(t, nt, inputs, targets):
+    p = t.merge(nt)
+    pred, _ = forward_checkpointed(p, inputs)
+    return jnp.mean((pred - targets) ** 2)
+
+  grads_checkpointed = jax.grad(loss_fn_checkpointed)(
+    trainable, non_trainable, x, y
+  )
+
+  # Gradients should match.
+  chex.assert_trees_all_close(grads_normal, grads_checkpointed)
+
+
+def test_checkpoint_with_dropout():
+  """Verifies checkpoint works with RNG-consuming layers like dropout.
+
+  When checkpoint recomputes the forward pass, the RNG state must produce
+  the same random values. blox's counter-based RNG ensures reproducibility.
+  """
+  graph = bx.Graph('root')
+  linear = bx.Linear(graph.child('linear'), output_size=8)
+  dropout = bx.Dropout(graph.child('dropout'), rate=0.5)
+
+  def forward(p, inputs):
+    h, p = linear(p, inputs)
+    out, p = dropout(p, h, is_training=True)
+    return out, p
+
+  x = jnp.ones((4, 8))
+  y = jnp.ones((4, 8))
+
+  # Initialize params by running forward.
+  params = bx.Params(seed=42)
+  _, params = forward(params, x)
+  params = params.finalize()
+
+  # Checkpoint the forward pass.
+  forward_checkpointed = jax.checkpoint(forward)
+
+  trainable, non_trainable = params.split()
+
+  # Compute gradients without checkpoint.
+  def loss_fn(t, nt, inputs, targets):
+    p = t.merge(nt)
+    pred, new_p = forward(p, inputs)
+    _, new_nt = new_p.split()
+    return jnp.mean((pred - targets) ** 2), new_nt
+
+  grads_normal, nt_normal = jax.grad(loss_fn, has_aux=True)(
+    trainable, non_trainable, x, y
+  )
+
+  # Compute gradients with checkpoint.
+  def loss_fn_checkpointed(t, nt, inputs, targets):
+    p = t.merge(nt)
+    pred, new_p = forward_checkpointed(p, inputs)
+    _, new_nt = new_p.split()
+    return jnp.mean((pred - targets) ** 2), new_nt
+
+  grads_checkpointed, nt_checkpointed = jax.grad(
+    loss_fn_checkpointed, has_aux=True
+  )(trainable, non_trainable, x, y)
+
+  # Gradients should match.
+  chex.assert_trees_all_close(grads_normal, grads_checkpointed)
+
+  # RNG counter should be updated the same way.
+  assert (
+    nt_normal._data[('rng', 'counter')].value
+    == nt_checkpointed._data[('rng', 'counter')].value
   )
