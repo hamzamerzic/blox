@@ -1,5 +1,4 @@
-"""
-Standard neural network blocks.
+"""Standard neural network blocks.
 
 This module contains implementations of common layers like Linear and LSTM.
 It serves as the user-facing library of pre-built components.
@@ -23,7 +22,7 @@ class Embed(bx.Module):
   applies the transpose of the embedding matrix (useful for output projections).
 
   Example:
-    embed = Embed(graph / 'embed', num_embeddings=10000, embedding_dim=512)
+    embed = Embed(graph / 'embed', num_embeddings=10000, embedding_size=512)
 
     # Forward pass: indices -> embeddings
     embeddings, params = embed(params, token_ids)
@@ -36,21 +35,26 @@ class Embed(bx.Module):
     self,
     graph: bx.Graph,
     num_embeddings: int,
-    embedding_dim: int,
-    w_init: Initializer | None = None,
+    embedding_size: int,
+    embedding_init: Initializer | None = None,
   ) -> None:
     """Initializes the Embed module.
 
     Args:
       graph: The graph node for this module.
       num_embeddings: Size of the vocabulary (number of unique tokens).
-      embedding_dim: Dimensionality of the embedding vectors.
-      w_init: Initializer for the embedding matrix. Defaults to normal.
+      embedding_size: Dimensionality of the embedding vectors.
+      embedding_init: Initializer for the embedding matrix. Defaults to normal.
     """
     super().__init__(graph)
     self.num_embeddings = num_embeddings
-    self.embedding_dim = embedding_dim
-    self.w_init = w_init or jax.nn.initializers.normal(stddev=1.0)
+    self.embedding_size = embedding_size
+    if embedding_init is not None:
+      self.embedding_init = embedding_init
+    else:
+      self.embedding_init = jax.nn.initializers.variance_scaling(
+        1.0, 'fan_in', 'normal', out_axis=0
+      )
 
   def __call__(
     self,
@@ -64,13 +68,13 @@ class Embed(bx.Module):
       indices: Integer array of token indices. Shape [...].
 
     Returns:
-      A tuple (embeddings, params). Embeddings have shape [..., embedding_dim].
+      A tuple (embeddings, params). Embeddings have shape [..., embedding_size].
     """
     embedding_matrix, params = self.get_param(
       params,
       'embedding',
-      (self.num_embeddings, self.embedding_dim),
-      self.w_init,
+      (self.num_embeddings, self.embedding_size),
+      self.embedding_init,
     )
     return embedding_matrix[indices], params
 
@@ -86,7 +90,7 @@ class Embed(bx.Module):
 
     Args:
       params: The parameters container.
-      inputs: Input array of shape [..., embedding_dim].
+      inputs: Input array of shape [..., embedding_size].
 
     Returns:
       A tuple (logits, params). Logits have shape [..., num_embeddings].
@@ -94,8 +98,8 @@ class Embed(bx.Module):
     embedding_matrix, params = self.get_param(
       params,
       'embedding',
-      (self.num_embeddings, self.embedding_dim),
-      self.w_init,
+      (self.num_embeddings, self.embedding_size),
+      self.embedding_init,
     )
     # inputs @ embedding_matrix.T
     return jnp.dot(inputs, embedding_matrix.T), params
@@ -104,14 +108,14 @@ class Embed(bx.Module):
 class Linear(bx.Module):
   """A standard linear transformation layer.
 
-  Computes `output = input @ w + b`.
+  Computes `output = input @ kernel + bias`.
 
   Supports model parallelism via metadata. Example for sharding weights:
     linear = Linear(
-      graph / 'linear',
+      graph.child('linear'),
       output_size=1024,
-      w_metadata={'sharding': (None, 'model')},  # Shard output dim
-      b_metadata={'sharding': ('model',)},
+      kernel_metadata={'sharding': (None, 'model')},  # Shard output dim
+      bias_metadata={'sharding': ('model',)},
     )
   """
 
@@ -119,32 +123,32 @@ class Linear(bx.Module):
     self,
     graph: bx.Graph,
     output_size: int,
-    with_bias: bool = True,
-    w_init: Initializer | None = None,
-    b_init: Initializer | None = None,
-    w_metadata: dict[str, Any] | None = None,
-    b_metadata: dict[str, Any] | None = None,
+    use_bias: bool = True,
+    kernel_init: Initializer | None = None,
+    bias_init: Initializer | None = None,
+    kernel_metadata: dict[str, Any] | None = None,
+    bias_metadata: dict[str, Any] | None = None,
   ) -> None:
     """Initializes the Linear module.
 
     Args:
       graph: The graph node for this module.
       output_size: The dimensionality of the output features.
-      with_bias: Whether to add a learnable bias vector.
-      w_init: Initializer for the weight matrix. Defaults to Lecun Normal.
-      b_init: Initializer for the bias vector. Defaults to Zeros.
-      w_metadata: Optional metadata for the weight parameter. Common keys:
+      use_bias: Whether to add a learnable bias vector.
+      kernel_init: Initializer for the weight matrix. Defaults to Lecun Normal.
+      bias_init: Initializer for the bias vector. Defaults to Zeros.
+      kernel_metadata: Optional metadata for the kernel parameter. Common keys:
         - 'sharding': tuple like (None, 'model') for model parallelism
-      b_metadata: Optional metadata for the bias parameter. Common keys:
+      bias_metadata: Optional metadata for the bias parameter. Common keys:
         - 'sharding': tuple like ('model',) for model parallelism
     """
     super().__init__(graph)
     self.output_size = output_size
-    self.with_bias = with_bias
-    self.w_init = w_init or jax.nn.initializers.lecun_normal()
-    self.b_init = b_init or jax.nn.initializers.constant(0.0)
-    self.w_metadata = w_metadata
-    self.b_metadata = b_metadata
+    self.use_bias = use_bias
+    self.kernel_init = kernel_init or jax.nn.initializers.lecun_normal()
+    self.bias_init = bias_init or jax.nn.initializers.zeros
+    self.kernel_metadata = kernel_metadata
+    self.bias_metadata = bias_metadata
 
   def __call__(
     self,
@@ -170,25 +174,25 @@ class Linear(bx.Module):
       raise ValueError('Input must not be scalar.')
 
     input_size = inputs.shape[-1]
-    w, params = self.get_param(
+    kernel, params = self.get_param(
       params,
-      'w',
+      'kernel',
       (input_size, self.output_size),
-      self.w_init,
-      metadata=self.w_metadata,
+      self.kernel_init,
+      metadata=self.kernel_metadata,
     )
-    outputs = jnp.dot(inputs, w, precision=precision)
+    outputs = jnp.dot(inputs, kernel, precision=precision)
 
-    if self.with_bias:
-      b, params = self.get_param(
+    if self.use_bias:
+      bias, params = self.get_param(
         params,
-        'b',
+        'bias',
         (self.output_size,),
-        self.b_init,
-        metadata=self.b_metadata,
+        self.bias_init,
+        metadata=self.bias_metadata,
       )
-      b = jnp.broadcast_to(b, outputs.shape)
-      outputs = outputs + b
+      bias = jnp.broadcast_to(bias, outputs.shape)
+      outputs = outputs + bias
 
     return outputs, params
 
@@ -200,12 +204,24 @@ class LSTMState(NamedTuple):
   cell: jax.Array
 
 
-class LSTM(bx.RNNCore[jax.Array, LSTMState, jax.Array, jax.Array]):
+class LSTM(bx.RecurrenceBase[jax.Array, LSTMState, jax.Array, jax.Array]):
   """Long Short-Term Memory (LSTM) Recurrent Neural Network.
 
-  This module implements a standard LSTM cell. It inherits from RNNCore,
-  automatically providing support for both step-by-step execution (`step`)
-  and efficient sequence compilation (`__call__` / `scan`).
+  This module implements a standard LSTM cell. It inherits from RecurrenceBase,
+  automatically providing support for both single-step execution (`__call__`)
+  and efficient sequence processing (`apply` with scanning).
+
+  Example:
+    lstm = LSTM(graph.child('lstm'), hidden_size=128)
+
+    # Initialize state first:
+    state, params = lstm.initial_state(params, inputs)
+
+    # Single-step processing (e.g., for interactive use):
+    (outputs, state), params = lstm(params, inputs, state)
+
+    # Sequence processing (uses jax.lax.scan for efficiency):
+    (outputs, state), params = lstm.apply(params, inputs_sequence, state)
   """
 
   def __init__(
@@ -245,7 +261,7 @@ class LSTM(bx.RNNCore[jax.Array, LSTMState, jax.Array, jax.Array]):
       cell=jnp.zeros((batch_size, self.hidden_size)),
     ), params
 
-  def step(
+  def __call__(
     self,
     params: bx.Params,
     inputs: jax.Array,
@@ -264,7 +280,7 @@ class LSTM(bx.RNNCore[jax.Array, LSTMState, jax.Array, jax.Array]):
       is_training: Unused.
 
     Returns:
-      A nested tuple ((hidden_state, new_state), params).
+      A nested tuple ((output, new_state), params).
       The output of the LSTM is the hidden state.
 
     Raises:
@@ -272,7 +288,7 @@ class LSTM(bx.RNNCore[jax.Array, LSTMState, jax.Array, jax.Array]):
     """
     del is_training  # Currently unused.
     if prev_state is None:
-      raise ValueError('The LSTM step method requires a valid prev_state.')
+      raise ValueError('The LSTM __call__ method requires a valid prev_state.')
 
     # Apply reset mask if provided.
     prev_state = self.maybe_reset_state(params, prev_state, inputs, is_reset)
@@ -305,6 +321,9 @@ class Dropout(bx.Module):
   the remaining elements by `1 / (1 - rate)` to maintain expected values.
   During inference, this layer is a no-op.
 
+  Can optionally use its own Rng module instead of params.next_key() for
+  finer control over randomness streams.
+
   For shard_map/vmap usage where different devices need different dropout masks,
   call `params.fold_in_axes('axis_name')` at the start and `fold_out_axes()` at
   the end:
@@ -320,17 +339,21 @@ class Dropout(bx.Module):
     self,
     graph: bx.Graph,
     rate: float = 0.5,
+    rng: bx.Rng | None = None,
   ) -> None:
     """Initializes the Dropout module.
 
     Args:
       graph: The graph node for this module.
       rate: The probability of dropping each element (0.0 to 1.0).
+      rng: Optional Rng module for this layer. If provided, uses this instead
+        of params.next_key() for generating dropout masks.
     """
     super().__init__(graph)
     if not 0.0 <= rate < 1.0:
       raise ValueError(f'Dropout rate must be in [0.0, 1.0), got {rate}.')
     self.rate = rate
+    self.rng = rng
 
   def __call__(
     self,
@@ -351,7 +374,12 @@ class Dropout(bx.Module):
     if not is_training or self.rate == 0.0:
       return inputs, params
 
-    key, params = params.next_key()
+    # Use module-owned RNG if provided, otherwise params.next_key().
+    if self.rng is not None:
+      key, params = self.rng(params)
+    else:
+      key, params = params.next_key()
+
     keep_rate = 1.0 - self.rate
     mask = jax.random.bernoulli(key, keep_rate, inputs.shape)
     return inputs * mask / keep_rate, params
@@ -525,6 +553,154 @@ class RMSNorm(bx.Module):
     return normalized, params
 
 
+class BatchNorm(bx.Module):
+  """Batch Normalization.
+
+  Normalizes over the batch and spatial dimensions, maintaining running
+  statistics for inference. During training, computes batch statistics and
+  updates the running averages. During inference, uses the stored running
+  statistics.
+
+  The input is expected to have shape (batch, *spatial_dims, features).
+  Normalization is applied over all axes except the last (features) axis.
+
+  Example:
+    bn = BatchNorm(graph.child('bn'))
+
+    # Training: uses batch statistics and updates running stats.
+    y, params = bn(params, x, is_training=True)
+
+    # Inference: uses running statistics.
+    y, params = bn(params, x, is_training=False)
+  """
+
+  def __init__(
+    self,
+    graph: bx.Graph,
+    momentum: float = 0.9,
+    epsilon: float = 1e-5,
+    use_scale: bool = True,
+    use_bias: bool = True,
+    scale_init: Initializer | None = None,
+    bias_init: Initializer | None = None,
+    axis_name: str | None = None,
+    axis_index_groups: Sequence[Sequence[int]] | None = None,
+  ) -> None:
+    """Initializes the BatchNorm module.
+
+    Args:
+      graph: The graph node for this module.
+      momentum: Momentum for the exponential moving average of running stats.
+        A value of 0.9 means running_stat = 0.9 * running_stat + 0.1 * batch_stat.
+      epsilon: Small constant for numerical stability.
+      use_scale: Whether to use a learnable scale parameter (gamma).
+      use_bias: Whether to use a learnable bias parameter (beta).
+      scale_init: Initializer for scale. Defaults to ones.
+      bias_init: Initializer for bias. Defaults to zeros.
+      axis_name: The axis name used to combine statistics from multiple devices.
+        See jax.shard_map for a description of axis names.
+      axis_index_groups: Groups of axis indices within that named axis
+        representing subsets of devices to reduce over.
+    """
+    super().__init__(graph)
+    self.momentum = momentum
+    self.epsilon = epsilon
+    self.use_scale = use_scale
+    self.use_bias = use_bias
+    self.scale_init = scale_init or jax.nn.initializers.ones
+    self.bias_init = bias_init or jax.nn.initializers.zeros
+    self.axis_name = axis_name
+    self.axis_index_groups = axis_index_groups
+
+  def __call__(
+    self,
+    params: bx.Params,
+    inputs: jax.Array,
+    is_training: bool = True,
+  ) -> tuple[jax.Array, bx.Params]:
+    """Applies batch normalization.
+
+    Args:
+      params: The parameters container.
+      inputs: The input array with shape (batch, *spatial_dims, features).
+      is_training: If True, uses batch statistics and updates running stats.
+        If False, uses stored running statistics (inference).
+
+    Returns:
+      A tuple (normalized_output, params).
+    """
+    features = inputs.shape[-1]
+    # Axes to reduce over: all except the last (features) axis.
+    reduce_axes = tuple(range(inputs.ndim - 1))
+
+    # Get or create running statistics (non-trainable).
+    running_mean, params = self.get_param(
+      params=params,
+      name='running_mean',
+      shape=(features,),
+      init=jax.nn.initializers.zeros,
+      trainable=False,
+    )
+    running_var, params = self.get_param(
+      params=params,
+      name='running_var',
+      shape=(features,),
+      init=jax.nn.initializers.ones,
+      trainable=False,
+    )
+
+    if is_training:
+      # Compute batch statistics.
+      mean = jnp.mean(inputs, axis=reduce_axes)
+      var = jnp.var(inputs, axis=reduce_axes)
+
+      # Cross-device aggregation if axis_name is provided.
+      if self.axis_name is not None:
+        mean = jax.lax.pmean(
+          mean, self.axis_name, axis_index_groups=self.axis_index_groups
+        )
+        var = jax.lax.pmean(
+          var, self.axis_name, axis_index_groups=self.axis_index_groups
+        )
+
+      # Update running statistics with exponential moving average.
+      # stop_gradient prevents backprop through running stats.
+      new_running_mean = self.momentum * running_mean + (
+        1 - self.momentum
+      ) * jax.lax.stop_gradient(mean)
+      new_running_var = self.momentum * running_var + (
+        1 - self.momentum
+      ) * jax.lax.stop_gradient(var)
+
+      # Store updated running statistics.
+      params = self.set_param(
+        params=params, name='running_mean', value=new_running_mean
+      )
+      params = self.set_param(
+        params=params, name='running_var', value=new_running_var
+      )
+    else:
+      # Use running statistics for inference.
+      mean = running_mean
+      var = running_var
+
+    # Normalize.
+    normalized = (inputs - mean) / jnp.sqrt(var + self.epsilon)
+
+    # Scale and shift.
+    if self.use_scale:
+      scale, params = self.get_param(
+        params, 'scale', (features,), self.scale_init
+      )
+      normalized = normalized * scale
+
+    if self.use_bias:
+      bias, params = self.get_param(params, 'bias', (features,), self.bias_init)
+      normalized = normalized + bias
+
+    return normalized, params
+
+
 def _normalize_tuple(x: int | Sequence[int], n: int) -> tuple[int, ...]:
   """Converts int or sequence to a tuple of length n."""
   if isinstance(x, int):
@@ -540,11 +716,11 @@ class Conv(bx.Module):
 
   Example:
     # 2D convolution for images (NHWC format)
-    conv = Conv(graph / 'conv', output_channels=64, kernel_size=(3, 3))
+    conv = Conv(graph.child('conv'), output_channels=64, kernel_size=(3, 3))
     y, params = conv(params, x)  # x: [batch, height, width, channels]
 
     # 1D convolution for sequences (NLC format)
-    conv = Conv(graph / 'conv', output_channels=64, kernel_size=3)
+    conv = Conv(graph.child('conv'), output_channels=64, kernel_size=3)
     y, params = conv(params, x)  # x: [batch, length, channels]
   """
 
@@ -558,11 +734,11 @@ class Conv(bx.Module):
     input_dilation: int | Sequence[int] = 1,
     kernel_dilation: int | Sequence[int] = 1,
     feature_group_count: int = 1,
-    with_bias: bool = True,
-    w_init: Initializer | None = None,
-    b_init: Initializer | None = None,
-    w_metadata: dict[str, Any] | None = None,
-    b_metadata: dict[str, Any] | None = None,
+    use_bias: bool = True,
+    kernel_init: Initializer | None = None,
+    bias_init: Initializer | None = None,
+    kernel_metadata: dict[str, Any] | None = None,
+    bias_metadata: dict[str, Any] | None = None,
   ) -> None:
     """Initializes the Conv module.
 
@@ -579,11 +755,11 @@ class Conv(bx.Module):
       kernel_dilation: Dilation of the kernel (atrous convolution).
       feature_group_count: Number of feature groups for grouped convolution.
         Set to input_channels for depthwise convolution.
-      with_bias: Whether to add a learnable bias.
-      w_init: Initializer for the kernel. Defaults to Lecun Normal.
-      b_init: Initializer for the bias. Defaults to zeros.
-      w_metadata: Optional metadata for the kernel parameter.
-      b_metadata: Optional metadata for the bias parameter.
+      use_bias: Whether to add a learnable bias.
+      kernel_init: Initializer for the kernel. Defaults to Lecun Normal.
+      bias_init: Initializer for the bias. Defaults to zeros.
+      kernel_metadata: Optional metadata for the kernel parameter.
+      bias_metadata: Optional metadata for the bias parameter.
     """
     super().__init__(graph)
     self.output_channels = output_channels
@@ -595,11 +771,11 @@ class Conv(bx.Module):
     self.input_dilation = input_dilation
     self.kernel_dilation = kernel_dilation
     self.feature_group_count = feature_group_count
-    self.with_bias = with_bias
-    self.w_init = w_init or jax.nn.initializers.lecun_normal()
-    self.w_metadata = w_metadata
-    self.b_metadata = b_metadata
-    self.b_init = b_init or jax.nn.initializers.zeros
+    self.use_bias = use_bias
+    self.kernel_init = kernel_init or jax.nn.initializers.lecun_normal()
+    self.kernel_metadata = kernel_metadata
+    self.bias_metadata = bias_metadata
+    self.bias_init = bias_init or jax.nn.initializers.zeros
 
   def __call__(
     self,
@@ -643,7 +819,11 @@ class Conv(bx.Module):
       self.output_channels,
     )
     kernel, params = self.get_param(
-      params, 'w', kernel_shape, self.w_init, metadata=self.w_metadata
+      params,
+      'kernel',
+      kernel_shape,
+      self.kernel_init,
+      metadata=self.kernel_metadata,
     )
 
     # Normalize strides and dilations to tuples.
@@ -676,13 +856,13 @@ class Conv(bx.Module):
     )
 
     # Add bias.
-    if self.with_bias:
+    if self.use_bias:
       bias, params = self.get_param(
         params,
-        'b',
+        'bias',
         (self.output_channels,),
-        self.b_init,
-        metadata=self.b_metadata,
+        self.bias_init,
+        metadata=self.bias_metadata,
       )
       outputs = outputs + bias
 

@@ -57,13 +57,13 @@ def test_sharded_linear_model_parallel():
   linear = bx.Linear(
     graph.child('linear'),
     output_size=16,
-    w_metadata={'sharding': (None, 'model')},
-    b_metadata={'sharding': ('model',)},
+    kernel_metadata={'sharding': (None, 'model')},
+    bias_metadata={'sharding': ('model',)},
   )
 
   # Initialize on host.
   x_sample = jnp.ones((1, 8))
-  params = bx.Params(seed=42)
+  params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=42))
   _, params = linear(params, x_sample)
   params = params.finalize()
 
@@ -100,13 +100,13 @@ def test_sharded_linear_data_parallel():
   linear = bx.Linear(
     graph.child('linear'),
     output_size=4,
-    w_metadata={'sharding': ()},
-    b_metadata={'sharding': ()},
+    kernel_metadata={'sharding': ()},
+    bias_metadata={'sharding': ()},
   )
 
   # Initialize on host.
   x_sample = jnp.ones((1, 3))
-  params = bx.Params(seed=42)
+  params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=42))
   _, params = linear(params, x_sample)
   params = params.finalize()
 
@@ -144,15 +144,15 @@ def test_sharded_mlp_tensor_parallel():
   layer1 = bx.Linear(
     graph.child('layer1'),
     output_size=16,
-    w_metadata={'sharding': (None, 'model')},
-    b_metadata={'sharding': ('model',)},
+    kernel_metadata={'sharding': (None, 'model')},
+    bias_metadata={'sharding': ('model',)},
   )
   # Row parallel: shard input.
   layer2 = bx.Linear(
     graph.child('layer2'),
     output_size=4,
-    w_metadata={'sharding': ('model', None)},
-    b_metadata={'sharding': ()},
+    kernel_metadata={'sharding': ('model', None)},
+    bias_metadata={'sharding': ()},
   )
 
   def mlp(params, x):
@@ -163,7 +163,7 @@ def test_sharded_mlp_tensor_parallel():
 
   # Initialize on host.
   x_sample = jnp.ones((1, 8))
-  params = bx.Params(seed=42)
+  params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=42))
   _, params = mlp(params, x_sample)
   params = params.finalize()
 
@@ -216,13 +216,15 @@ def test_init_with_fold_in_axes_produces_different_params():
   linear = bx.Linear(
     graph.child('linear'),
     output_size=4,
-    w_metadata={'sharding': ('model',)},
-    b_metadata={'sharding': ('model',)},
+    kernel_metadata={'sharding': ('model',)},
+    bias_metadata={'sharding': ('model',)},
   )
+  # Create Rng outside init_model so it can be reused.
+  rng = bx.Rng(graph.child('rng'), seed=42)
 
   # Same init function works for eval_shape AND shard_map!
   def init_model(x):
-    params = bx.Params(seed=42).fold_in_axes('model')
+    params = bx.Params(rng=rng).fold_in_axes('model')
     _, params = linear(params, x)
     # fold_out_axes to match pytree metadata with eval_shape.
     return params.fold_out_axes('model').finalize()
@@ -267,10 +269,12 @@ def test_init_with_fold_in_axes_produces_different_params():
   ), 'Different devices should have different params when using fold_in_axes'
 
   # Verify the weight values differ across shards.
-  w_shards = params._data[('root', 'linear', 'w')].value.addressable_shards
-  w_shard_data = [np.asarray(s.data) for s in w_shards]
+  kernel_shards = params._data[
+    ('root', 'linear', 'kernel')
+  ].value.addressable_shards
+  kernel_shard_data = [np.asarray(s.data) for s in kernel_shards]
   assert not np.allclose(
-    w_shard_data[0], w_shard_data[1]
+    kernel_shard_data[0], kernel_shard_data[1]
   ), 'Weights should differ across devices with fold_in_axes'
 
 
@@ -286,14 +290,16 @@ def test_init_without_fold_in_axes_produces_same_params():
   linear = bx.Linear(
     graph.child('linear'),
     output_size=4,
-    w_metadata={'sharding': ('model',)},
-    b_metadata={'sharding': ('model',)},
+    kernel_metadata={'sharding': ('model',)},
+    bias_metadata={'sharding': ('model',)},
   )
+  # Create Rng outside init_model so it can be reused.
+  rng = bx.Rng(graph.child('rng'), seed=42)
 
   # Same init function for eval_shape and shard_map.
   def init_model(x):
     # No fold_in_axes = all devices use same RNG sequence.
-    params = bx.Params(seed=42)
+    params = bx.Params(rng=rng)
     _, params = linear(params, x)
     return params.finalize()
 
@@ -328,10 +334,12 @@ def test_init_without_fold_in_axes_produces_same_params():
 
   # === Verification ===
   # All devices should have identical weights (wrong for sharded init!).
-  w_shards = params._data[('root', 'linear', 'w')].value.addressable_shards
-  w_shard_data = [np.asarray(s.data) for s in w_shards]
+  kernel_shards = params._data[
+    ('root', 'linear', 'kernel')
+  ].value.addressable_shards
+  kernel_shard_data = [np.asarray(s.data) for s in kernel_shards]
   assert np.allclose(
-    w_shard_data[0], w_shard_data[1]
+    kernel_shard_data[0], kernel_shard_data[1]
   ), 'Without fold_in_axes, all devices should have same weights'
 
 
@@ -358,7 +366,7 @@ def test_layernorm_cross_device():
     axis=0,
   )  # Shape (8, 4)
 
-  params = bx.Params(seed=0)
+  params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=0))
 
   @jax.jit
   @jax.shard_map(
@@ -399,7 +407,9 @@ def test_dropout_with_fold_in_axes_different_masks():
   )
   def apply_dropout_with_fold_in(x):
     # fold_in_axes causes device-unique RNG.
-    params = bx.Params(seed=42).fold_in_axes('batch')
+    params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=42)).fold_in_axes(
+      'batch'
+    )
     out, _ = dropout(params, x, is_training=True)
     return out
 
@@ -429,7 +439,7 @@ def test_dropout_without_fold_in_axes_same_masks():
   )
   def apply_dropout_no_fold(x):
     # No fold_in_axes = same RNG on all devices.
-    params = bx.Params(seed=42)
+    params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=42))
     out, _ = dropout(params, x, is_training=True)
     return out
 

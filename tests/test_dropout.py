@@ -9,7 +9,7 @@ def test_dropout_training_mode():
   dropout = bx.Dropout(graph.child('dropout'), rate=0.5)
 
   x = jnp.ones((100, 100))
-  params = bx.Params(seed=42)
+  params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=42))
 
   y, params = dropout(params, x, is_training=True)
 
@@ -27,7 +27,7 @@ def test_dropout_inference_mode():
   dropout = bx.Dropout(graph.child('dropout'), rate=0.5)
 
   x = jnp.ones((10, 10))
-  params = bx.Params(seed=42)
+  params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=42))
 
   y, _ = dropout(params, x, is_training=False)
 
@@ -41,17 +41,22 @@ def test_dropout_rng_consumption():
   dropout = bx.Dropout(graph.child('dropout'), rate=0.5)
 
   x = jnp.ones((10, 10))
-  params = bx.Params(seed=42)
+  params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=42))
 
-  initial_counter = params._data[('rng', 'counter')].value
+  # RNG counter is stored under the Rng module's graph path.
+  counter_path = ('root', 'rng', 'counter')
 
-  # Training mode should consume RNG.
+  # Training mode should consume RNG (counter gets initialized on first call).
   _, params_train = dropout(params, x, is_training=True)
-  assert params_train._data[('rng', 'counter')].value == initial_counter + 1
+  counter_after_train = params_train._data[counter_path].value
+
+  # Second training call should increment counter.
+  _, params_train2 = dropout(params_train, x, is_training=True)
+  assert params_train2._data[counter_path].value == counter_after_train + 1
 
   # Inference mode should not consume RNG.
-  _, params_infer = dropout(params, x, is_training=False)
-  assert params_infer._data[('rng', 'counter')].value == initial_counter
+  _, params_infer = dropout(params_train, x, is_training=False)
+  assert params_infer._data[counter_path].value == counter_after_train
 
 
 def test_dropout_scaling():
@@ -62,7 +67,7 @@ def test_dropout_scaling():
 
   # Use large input to get stable statistics.
   x = jnp.ones((1000, 1000))
-  params = bx.Params(seed=42)
+  params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=42))
 
   y, _ = dropout(params, x, is_training=True)
 
@@ -82,16 +87,16 @@ def test_dropout_zero_rate():
   dropout = bx.Dropout(graph.child('dropout'), rate=0.0)
 
   x = jnp.ones((10, 10))
-  params = bx.Params(seed=42)
+  params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=42))
 
   y, params_out = dropout(params, x, is_training=True)
 
   assert jnp.allclose(y, x), 'Dropout with rate=0 should be identity.'
-  # Should not consume RNG.
+  # Should not consume RNG (counter should not even be initialized).
+  counter_path = ('root', 'rng', 'counter')
   assert (
-    params_out._data[('rng', 'counter')].value
-    == params._data[('rng', 'counter')].value
-  )
+    counter_path not in params_out._data
+  ), 'Dropout with rate=0 should not consume RNG.'
 
 
 def test_dropout_invalid_rate():

@@ -10,13 +10,13 @@ def test_lstm_sequence_shapes():
 
   # Batch=2, Time=5, Dim=4
   inputs = jnp.ones((2, 5, 4))
-  params = bx.Params(seed=0)
+  params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=0))
 
   # Explicitly initialize state.
   state, params = lstm.initial_state(params, inputs)
 
-  # Call returns ((out, state), params).
-  ((out, state), params) = lstm(params, inputs, state)
+  # apply() processes sequences, returns ((out, state), params).
+  ((out, state), params) = lstm.apply(params, inputs, state)
 
   # Output should match batch and time dims.
   assert out.shape == (2, 5, 10)
@@ -24,19 +24,19 @@ def test_lstm_sequence_shapes():
   assert state.hidden.shape == (2, 10)
 
 
-def test_lstm_step_signature():
-  """Verifies step returns strict tuple structure: ((out, state), params)."""
+def test_lstm_call_signature():
+  """Verifies __call__ returns strict tuple structure: ((out, state), params)."""
   graph = bx.Graph('root')
   lstm = bx.LSTM(graph.child('lstm'), hidden_size=10)
 
   inputs = jnp.ones((2, 4))
-  params = bx.Params(seed=0)
+  params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=0))
 
   # Initialize state manually.
   state, params = lstm.initial_state(params, inputs)
 
-  # Step call.
-  ret = lstm.step(params, inputs, state)
+  # Single-step call via __call__.
+  ret = lstm(params, inputs, state)
 
   # Check structure: ((out, state), params).
   assert isinstance(ret, tuple)
@@ -48,17 +48,17 @@ def test_lstm_step_signature():
   assert isinstance(new_params, bx.Params)
 
 
-def test_lstm_step_raises_on_none_state():
-  """Verifies step raises ValueError if prev_state is None."""
+def test_lstm_call_raises_on_none_state():
+  """Verifies __call__ raises ValueError if prev_state is None."""
   graph = bx.Graph('root')
   lstm = bx.LSTM(graph.child('lstm'), hidden_size=10)
   inputs = jnp.ones((1, 4))
-  params = bx.Params(seed=0)
+  params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=0))
 
   with pytest.raises(
-    ValueError, match='The LSTM step method requires a valid prev_state.'
+    ValueError, match='The LSTM __call__ method requires a valid prev_state.'
   ):
-    lstm.step(params, inputs, None)
+    lstm(params, inputs, None)
 
 
 def test_lstm_static_vs_dynamic():
@@ -68,20 +68,20 @@ def test_lstm_static_vs_dynamic():
   lstm = bx.LSTM(graph.child('rnn'), hidden_size=5, is_static=False)
 
   inputs = jnp.ones((2, 10, 4))
-  params = bx.Params(seed=42)
+  params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=42))
 
-  # Initialization pass.
+  # Initialization pass using apply().
   state, params = lstm.initial_state(params, inputs)
-  ((_, _), params) = lstm(params, inputs, state)
+  ((_, _), params) = lstm.apply(params, inputs, state)
   params = params.finalize()
 
-  # Run dynamic.
+  # Run dynamic (jax.lax.scan).
   lstm.is_static = False
-  ((y_dyn, _), _) = lstm(params, inputs, state)
+  ((y_dyn, _), _) = lstm.apply(params, inputs, state)
 
-  # Run static.
+  # Run static (Python loop).
   lstm.is_static = True
-  ((y_stat, _), _) = lstm(params, inputs, state)
+  ((y_stat, _), _) = lstm.apply(params, inputs, state)
 
   assert jnp.allclose(y_dyn, y_stat, atol=1e-5)
 
@@ -93,17 +93,17 @@ def test_lstm_reset_logic():
 
   # Batch=1, Time=3
   inputs = jnp.ones((1, 3, 2))
-  params = bx.Params(seed=0)
+  params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=0))
 
-  # Initialization pass.
+  # Initialization pass using apply().
   initial_state, params = lstm.initial_state(params, inputs)
-  ((_, _), params) = lstm(params, inputs, initial_state)
+  ((_, _), params) = lstm.apply(params, inputs, initial_state)
   params = params.finalize()
 
   # Reset at t=1.
   reset = jnp.array([[False, True, False]])
 
-  ((out, _), params) = lstm(params, inputs, initial_state, is_reset=reset)
+  ((out, _), params) = lstm.apply(params, inputs, initial_state, is_reset=reset)
 
   out_0 = out[0, 0]
   out_1 = out[0, 1]

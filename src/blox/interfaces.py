@@ -1,11 +1,10 @@
-"""
-Core interfaces and abstractions for the blox library.
+"""Core interfaces and abstractions for the blox library.
 
 This module defines the fundamental building blocks of the library, including:
 - Graph: Structural definition of the model hierarchy.
 - Params: Immutable, functional state container.
 - Module: Base class for neural network layers.
-- Sequential/RNNCore: Interfaces for time-series processing.
+- SequenceBase/RecurrenceBase: Interfaces for sequence processing.
 
 It is designed to be strictly typed and utilizes chex for runtime shape checking.
 """
@@ -26,9 +25,9 @@ Shape = tuple[int, ...]
 Initializer = jax.nn.initializers.Initializer
 Path = tuple[str, ...]
 
-InputT = TypeVar('InputT', bound=chex.ArrayTree)
+InputsT = TypeVar('InputsT', bound=chex.ArrayTree)
 StateT = TypeVar('StateT', bound=chex.ArrayTree)
-OutputT = TypeVar('OutputT', bound=chex.ArrayTree)
+OutputsT = TypeVar('OutputsT', bound=chex.ArrayTree)
 ResetT = TypeVar('ResetT', bound=chex.ArrayTree)
 
 
@@ -152,9 +151,9 @@ class Param:
     self.metadata = metadata or {}
 
   @property
-  def sharding(self) -> tuple[str | None, ...] | None:
+  def sharding(self) -> tuple[str | None, ...]:
     """Returns the sharding spec from metadata, if present."""
-    return self.metadata.get('sharding')
+    return self.metadata.get('sharding', ())
 
   def replace(self, **updates: Any) -> Param:
     """Creates a new Param with updated fields.
@@ -202,46 +201,39 @@ jax.tree_util.register_pytree_node(
 
 
 class Params:
-  """Immutable container for variables and RNG state.
+  """Immutable container for model parameters and state.
 
   This class manages the functional state of the model. It handles:
   1. Parameter storage and retrieval via tuple paths.
-  2. Deterministic RNG key splitting.
+  2. Deterministic RNG key generation via an Rng module.
   3. Partitioning state for JIT compilation (trainable vs non-trainable).
 
   For sharded/vmapped code, use fold_in_axes() at the start of the function
   to get device-unique RNG keys while keeping the master key replicated.
   """
 
-  def __init__(self, *, seed: int | jax.Array) -> None:
-    """Initializes the container with a master random seed.
+  def __init__(self, *, rng: 'Rng') -> None:
+    """Initializes the container with an Rng module.
 
     Args:
-      seed: An integer seed or a JAX random key.
+      rng: An Rng module for random number generation.
     """
     self._data: dict[Path, Param] = {}
     self._initialized: bool = False
     # Tracks which axes have been folded in (ordered tuple for determinism).
-    # Part of pytree metadata, restored on unflatten.
     self._folded_axes: tuple[str, ...] = ()
-    # Local key derived from master key + folded axes. None until fold_in_axes.
-    self._folded_key: jax.Array | None = None
-
-    if isinstance(seed, int):
-      key = jax.random.key(seed)
-    else:
-      key = seed
-
-    # Store RNG key and counter as separate Params for clean pytree structure.
-    self._data[('rng', 'key')] = Param(key, trainable=False)
-    self._data[('rng', 'counter')] = Param(
-      jnp.array(0, dtype=jnp.uint32), trainable=False
-    )
+    # Reference to the Rng module for key generation.
+    self._rng: 'Rng' = rng
 
   @property
   def initialized(self) -> bool:
     """Returns True if the parameter initialization has been finalized."""
     return self._initialized
+
+  @property
+  def folded_axes(self) -> tuple[str, ...]:
+    """Returns the currently folded axes for device-unique RNG."""
+    return self._folded_axes
 
   def __repr__(self) -> str:
     n_vars = len(self._data)
@@ -249,11 +241,11 @@ class Params:
     return f'Params({n_vars} variables, {status})'
 
   def fold_in_axes(self, *axis_names: str) -> 'Params':
-    """Folds axis indices into the RNG for device-unique randomness.
+    """Records axes to fold in for device-unique RNG.
 
     Call this at the start of a shard_map or vmap function to get different
-    RNG keys on each device/batch element. The master key stays replicated,
-    but subsequent next_key() calls will produce device-unique keys.
+    RNG keys on each device/batch element. The Rng module reads folded_axes
+    when generating keys.
 
     Folding is idempotent per axis - folding the same axis twice has no effect.
     Axes are folded in order, which affects the resulting key.
@@ -264,7 +256,7 @@ class Params:
       *axis_names: Axis names to fold in (e.g., 'model', 'batch').
 
     Returns:
-      A new Params with the axes folded in.
+      Self if all axes already folded, otherwise a new Params with axes recorded.
 
     Raises:
       ValueError: If an axis doesn't exist in the current context.
@@ -272,7 +264,7 @@ class Params:
     Example:
       @jax.shard_map(mesh=mesh, in_specs=P(), out_specs=param_specs)
       def init_sharded(x):
-        params = bx.Params(seed=42).fold_in_axes('model')
+        params = bx.Params(rng=rng).fold_in_axes('model')
         _, params = model(params, x)
         return params.fold_out_axes('model').finalize()
     """
@@ -295,30 +287,19 @@ class Params:
           f'Make sure fold_in_axes is called inside shard_map/vmap with this axis.'
         )
 
-    # Fold in each axis sequentially.
-    result = self
-    for axis_name in axis_names:
-      if axis_name in result._folded_axes:
-        continue  # Already folded, skip.
+    # Check if all axes are already folded (idempotent).
+    new_axes = [name for name in axis_names if name not in self._folded_axes]
+    if not new_axes:
+      return self
 
-      # Compute new folded key by folding in the axis index.
-      base_key = (
-        result._folded_key
-        if result._folded_key is not None
-        else result._data[('rng', 'key')].value
-      )
-      axis_idx = jax.lax.axis_index(axis_name)
-      new_folded_key = jax.random.fold_in(base_key, axis_idx)
-
-      new_p = result._clone()
-      new_p._folded_axes = result._folded_axes + (axis_name,)
-      new_p._folded_key = new_folded_key
-      result = new_p
-
-    return result
+    # Record folded axes (actual folding happens in Rng).
+    new_p = self._clone()
+    for axis_name in new_axes:
+      new_p._folded_axes = new_p._folded_axes + (axis_name,)
+    return new_p
 
   def fold_out_axes(self, *axis_names: str) -> 'Params':
-    """Unfolds axis indices from the RNG, reverting to outer context.
+    """Removes axes from the folded axes list.
 
     Call this before returning from shard_map/vmap to ensure pytree metadata
     matches between eval_shape (outside) and actual execution (inside).
@@ -330,7 +311,7 @@ class Params:
       *axis_names: Axis names to unfold. Must be at the end of _folded_axes.
 
     Returns:
-      A new Params with the axes unfolded.
+      A new Params with the axes removed from folded_axes.
 
     Raises:
       ValueError: If axes are not at the end of the folded axes stack.
@@ -370,75 +351,31 @@ class Params:
       )
 
     # Remove axes from the end.
-    new_folded_axes = self._folded_axes[:-n_to_remove]
-
-    # Recompute folded_key from remaining axes.
     new_p = self._clone()
-    new_p._folded_axes = ()
-    new_p._folded_key = None
-
-    # Re-fold remaining axes.
-    for axis_name in new_folded_axes:
-      base_key = (
-        new_p._folded_key
-        if new_p._folded_key is not None
-        else new_p._data[('rng', 'key')].value
-      )
-      axis_idx = jax.lax.axis_index(axis_name)
-      new_p._folded_key = jax.random.fold_in(base_key, axis_idx)
-      new_p._folded_axes = new_p._folded_axes + (axis_name,)
-
+    new_p._folded_axes = self._folded_axes[:-n_to_remove]
     return new_p
 
   def next_key(self) -> tuple[jax.Array, Params]:
-    """Generates a new key and increments the internal counter.
+    """Generates a new key using the internal Rng module.
 
-    This ensures functional purity. The method returns a new key and a *new*
-    Params container with the updated counter.
-
-    If fold_in_axes() was called, the generated key will be derived from
-    the folded key, producing device-unique keys inside shard_map/vmap.
+    Delegates to the Rng module which handles key generation, counter
+    management, and folded axes for device-unique randomness.
 
     Returns:
       A tuple containing (new_key, new_params_container).
 
     Raises:
-      ValueError: If the 'rng' state is missing.
+      ValueError: If no Rng was configured.
     """
-    key_path = ('rng', 'key')
-    counter_path = ('rng', 'counter')
-
-    if key_path not in self._data or counter_path not in self._data:
-      raise ValueError('Params container must contain RNG state.')
-
-    # Use folded key if available, otherwise master key.
-    base_key = (
-      self._folded_key
-      if self._folded_key is not None
-      else self._data[key_path].value
-    )
-    counter = self._data[counter_path].value
-
-    # Generate deterministic key based on current counter.
-    new_key = jax.random.fold_in(base_key, counter)
-
-    # Increment counter.
-    new_counter = counter + 1
-
-    # Return updated container.
-    new_p = self._clone()
-    new_p._data[counter_path] = self._data[counter_path].replace(
-      value=new_counter
-    )
-    return new_key, new_p
+    return self._rng(self)
 
   def get(
     self,
     graph: Graph,
     name: str,
     shape: Shape,
-    initializer: Initializer,
-    dtype: Any = float,
+    init: Initializer,
+    dtype: jnp.dtype = jnp.float32,
     trainable: bool = True,
     metadata: dict[str, Any] | None = None,
   ) -> tuple[jax.Array, Params]:
@@ -448,7 +385,7 @@ class Params:
       graph: The graph node requesting the parameter.
       name: The local name of the parameter.
       shape: The shape of the parameter tensor.
-      initializer: Function to initialize the parameter.
+      init: Function to initialize the parameter.
       dtype: The data type.
       trainable: Whether the parameter is trainable.
       metadata: Optional metadata dictionary. Common keys include:
@@ -471,11 +408,16 @@ class Params:
       path_str = '/'.join(full_path)
       raise KeyError(f"Parameter '{path_str}' is missing.")
 
-    # Consume RNG to generate a fresh key.
-    key, new_p = self.next_key()
+    # Try initializer with key=None first (for constant initializers).
+    # If that fails, use a fresh key from RNG.
+    try:
+      val = init(None, shape, dtype)  # type: ignore
+      new_p = self._clone()
+    except Exception:
+      # Initializer requires a key, so get one from RNG.
+      key, new_p = self.next_key()
+      val = init(key, shape, dtype)
 
-    # Initialize the new value.
-    val = initializer(key, shape, dtype)
     var = Param(val, trainable=trainable, metadata=metadata)
 
     # Store the variable.
@@ -500,15 +442,14 @@ class Params:
       raise KeyError(f"Path '{path_str}' not found.")
 
     current_var = self._data[path]
-    val_arr = jnp.array(value, dtype=current_var.value.dtype)
-    new_var = current_var.replace(value=val_arr)
+    new_var = current_var.replace(value=value)
 
     new_p = self._clone()
     new_p._data[path] = new_var
     return new_p
 
   def split(
-    self, predicate: Callable[[Path, str, Param], bool] | None = None
+    self, predicate: Callable[[Path, Param], bool] | None = None
   ) -> tuple[Params, Params]:
     """Splits params into two containers based on a predicate.
 
@@ -516,16 +457,16 @@ class Params:
     (trainable vs non-trainable) otherwise splits by the provided predicate.
 
     Args:
-      predicate: Optional function taking (module_path, param_name, param)
-        and returning bool. module_path is a tuple like ('net', 'encoder'),
-        param_name is the variable name like 'w'. If None, defaults to
-        splitting by trainable flag.
+      predicate: Optional function taking (param_path, param) and returning
+        bool. param_path is a tuple like ('net', 'encoder', 'w'), where the last
+        entry is the param name. If None, defaults to splitting into trainable
+        and non-trainable params.
 
     Returns:
       A tuple (matching_params, non_matching_params).
     """
 
-    def _default_predicate(_path: Path, _name: str, p: Param) -> bool:
+    def _default_predicate(_path: Path, p: Param) -> bool:
       return p.trainable
 
     if predicate is None:
@@ -534,11 +475,7 @@ class Params:
     t_data: dict[Path, Param] = {}
     f_data: dict[Path, Param] = {}
     for full_path, param in self._data.items():
-      # Split full_path tuple into module_path and param_name.
-      module_path = full_path[:-1]
-      param_name = full_path[-1]
-
-      if predicate(module_path, param_name, param):
+      if predicate(full_path, param):
         t_data[full_path] = param
       else:
         f_data[full_path] = param
@@ -580,51 +517,28 @@ class Params:
     p._data = self._data.copy()
     p._initialized = self._initialized
     p._folded_axes = self._folded_axes
-    p._folded_key = self._folded_key
+    p._rng = self._rng
+
     return p
 
   def tree_flatten(
     self,
-  ) -> tuple[tuple[dict[Path, Param]], tuple[bool, tuple[str, ...]]]:
-    """Flattens the container for JAX pytree registration.
-
-    Note: folded_key is NOT included as a child. It will be reconstructed
-    on unflatten from the folded_axes metadata.
-    """
-    return (self._data,), (self._initialized, self._folded_axes)
+  ) -> tuple[tuple[dict[Path, Param]], tuple[bool, tuple[str, ...], 'Rng']]:
+    """Flattens the container for JAX pytree registration."""
+    return (self._data,), (self._initialized, self._folded_axes, self._rng)
 
   @classmethod
   def tree_unflatten(
     cls,
-    aux: tuple[bool, tuple[str, ...]],
+    aux: tuple[bool, tuple[str, ...], 'Rng'],
     children: tuple[dict[Path, Param]],
   ) -> Params:
-    """Unflattens the container for JAX pytree registration.
-
-    Restores the params state as-is. Users are responsible for explicitly
-    calling fold_out_axes() before returning from shard_map/vmap.
-    """
+    """Unflattens the container for JAX pytree registration."""
     p = cast(Params, object.__new__(cls))
     p._data = children[0]
     p._initialized = aux[0]
     p._folded_axes = aux[1]
-
-    # Reconstruct folded_key if there are folded axes.
-    if p._folded_axes:
-      current_axes = jax.core.unsafe_get_axis_names_DO_NOT_USE()
-      if current_axes:
-        # Re-fold each axis to reconstruct folded_key.
-        base_key = p._data[('rng', 'key')].value
-        for axis_name in p._folded_axes:
-          axis_idx = jax.lax.axis_index(axis_name)
-          base_key = jax.random.fold_in(base_key, axis_idx)
-        p._folded_key = base_key
-      else:
-        # Outside transformation, can't reconstruct folded_key.
-        p._folded_key = None
-    else:
-      p._folded_key = None
-
+    p._rng = aux[2]
     return p
 
 
@@ -705,8 +619,8 @@ class Module:
     params: Params,
     name: str,
     shape: Shape,
-    initializer: Initializer,
-    dtype: Any = float,
+    init: Initializer,
+    dtype: jnp.dtype = jnp.float32,
     trainable: bool = True,
     metadata: dict[str, Any] | None = None,
   ) -> tuple[jax.Array, Params]:
@@ -716,7 +630,7 @@ class Module:
       params: The parameters container.
       name: The local name of the parameter (appended to graph path).
       shape: The shape of the parameter.
-      initializer: The initialization function.
+      init: The initialization function.
       dtype: The data type.
       trainable: Whether the parameter is trainable.
       metadata: Optional metadata dictionary. Common keys include:
@@ -725,14 +639,121 @@ class Module:
     Returns:
       A tuple containing (parameter_value, new_params_container).
     """
-    return params.get(
-      self.graph, name, shape, initializer, dtype, trainable, metadata
+    return params.get(self.graph, name, shape, init, dtype, trainable, metadata)
+
+  def set_param(self, params: Params, name: str, value: Any) -> Params:
+    """Shortcut to update a parameter within this module's graph scope.
+
+    Args:
+      params: The parameters container.
+      name: The local name of the parameter (appended to graph path).
+      value: The new value.
+
+    Returns:
+      A new Params container with the updated value.
+    """
+    full_path = self.graph.path + (name,)
+    return params.set(full_path, value)
+
+
+class Rng(Module):
+  """A random number generator stream stored as non-trainable params.
+
+  Produces deterministic, counter-based random keys. Reads folded_axes
+  from Params (via public property) for device-unique randomness in vmap/shard_map.
+
+  Uses get_param like any other module - no internal state access.
+
+  Example:
+    # Create Params with an Rng
+    graph = bx.Graph('root')
+    params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=42))
+
+    # Get a key
+    key, params = params.next_key()
+
+    # Module-owned RNG for Dropout
+    class MyModel(bx.Module):
+      def __init__(self, graph):
+        super().__init__(graph)
+        self.dropout_rng = bx.Rng(graph.child('dropout_rng'), seed=0)
+        self.dropout = bx.Dropout(
+          graph.child('dropout'), rate=0.5, rng=self.dropout_rng
+        )
+
+      def __call__(self, params, x, is_training=True):
+        x, params = self.dropout(params, x, is_training)
+        return x, params
+  """
+
+  def __init__(self, graph: Graph, seed: int | jax.Array) -> None:
+    """Initializes the Rng module.
+
+    Args:
+      graph: The graph node for this module's scope.
+      seed: Integer seed or JAX key array.
+    """
+    super().__init__(graph)
+    self.seed = seed
+    # Store initial key value (will be initialized via get_param on first call).
+    if isinstance(seed, int):
+      self._init_key = jax.random.key(seed)
+    else:
+      self._init_key = seed
+
+  def __call__(self, params: Params) -> tuple[jax.Array, Params]:
+    """Generate next key, respecting params' folded axes.
+
+    The key and counter are stored as non-trainable params under this
+    module's graph path (using get_param). Each call increments the counter.
+
+    Args:
+      params: The params container.
+
+    Returns:
+      Tuple of (new_key, updated_params).
+    """
+    # Get or create key/counter using constant initializers (no RNG needed).
+    key_init = jax.nn.initializers.constant(
+      self._init_key, self._init_key.dtype
+    )
+    counter_init = jax.nn.initializers.constant(0, dtype=jnp.uint32)
+
+    base_key, params = self.get_param(
+      params,
+      'key',
+      self._init_key.shape,
+      key_init,
+      dtype=self._init_key.dtype,
+      trainable=False,
+    )
+    counter, params = self.get_param(
+      params, 'counter', (), counter_init, dtype=jnp.uint32, trainable=False
     )
 
+    # Fold in any axes from params.folded_axes (public property).
+    folded_key = base_key
+    for axis_name in params.folded_axes:
+      axis_idx = jax.lax.axis_index(axis_name)
+      folded_key = jax.random.fold_in(folded_key, axis_idx)
+
+    # Fold in counter for deterministic sequence.
+    new_key = jax.random.fold_in(folded_key, counter)
+
+    # Increment counter using set_param.
+    params = self.set_param(params, 'counter', counter + 1)
+
+    return new_key, params
+
 
 # ==============================================================================
-# Sequential & Scanning Logic
+# Sequence Processing & Scanning Logic
 # ==============================================================================
+
+StepFn = Callable[
+  [Params, InputsT, StateT, ResetT | None, bool],
+  tuple[tuple[OutputsT, StateT], Params],
+]
 
 
 def _swap_batch_time(x: jax.Array) -> jax.Array:
@@ -741,20 +762,20 @@ def _swap_batch_time(x: jax.Array) -> jax.Array:
 
 
 def _scan_init(
-  core: RNNCore[InputT, StateT, OutputT, ResetT],
+  step_fn: StepFn[InputsT, StateT, OutputsT, ResetT],
   params: Params,
-  inputs: InputT,
+  inputs: InputsT,
   prev_state: StateT,
   is_reset: ResetT | None,
   is_training: bool,
-) -> tuple[tuple[OutputT, StateT], Params]:
+) -> tuple[tuple[OutputsT, StateT], Params]:
   """Performs a single initialization step and expands output."""
   # Slice inputs to time 0.
   inputs_t0 = jax.tree.map(lambda x: x[:, 0], inputs)
   reset_t0 = jax.tree.map(lambda x: jnp.ones_like(x[:, 0]), is_reset)
 
   # Run one step to initialize parameters.
-  (out_t0, new_state), new_params = core.step(
+  (out_t0, new_state), new_params = step_fn(
     params, inputs_t0, prev_state, reset_t0, is_training
   )
 
@@ -766,13 +787,13 @@ def _scan_init(
 
 
 def static_scan(
-  core: RNNCore[InputT, StateT, OutputT, ResetT],
+  step_fn: StepFn[InputsT, StateT, OutputsT, ResetT],
   params: Params,
-  inputs: InputT,
+  inputs: InputsT,
   prev_state: StateT,
   is_reset: ResetT | None,
   is_training: bool,
-) -> tuple[tuple[OutputT, StateT], Params]:
+) -> tuple[tuple[OutputsT, StateT], Params]:
   """Performs a Python loop scan over the time dimension.
 
   This function explicitly iterates over the time dimension (axis 1) of the
@@ -781,10 +802,12 @@ def static_scan(
   is very short.
 
   Args:
-    core: The RNN module implementing the `step` method.
+    step_fn: A callable that processes a single time step. Signature:
+      (params, inputs, state, is_reset, is_training) -> ((output, state), params)
+      This can be a method like `model.__call__` or a partial function.
     params: The parameters container.
     inputs: Input sequence Pytree [Batch, Time, ...].
-    prev_state: Initial state (must be initialized).
+    prev_state: Initial state.
     is_reset: Optional reset signal [Batch, Time].
     is_training: Training flag.
 
@@ -802,10 +825,15 @@ def static_scan(
     if x.ndim < 2:
       raise ValueError(f'Input leaves must have rank >= 2, got {x.ndim}.')
 
-  if not params.initialized:
-    return _scan_init(core, params, inputs, prev_state, is_reset, is_training)
-
+  # Verify all inputs have the same time dimension.
   T = leaves[0].shape[1]
+  for x in leaves:
+    chex.assert_axis_dimension(x, axis=1, expected=T)
+
+  if not params.initialized:
+    return _scan_init(
+      step_fn, params, inputs, prev_state, is_reset, is_training
+    )
 
   outputs_list = []
   current_state = prev_state
@@ -815,8 +843,8 @@ def static_scan(
     inputs_t = jax.tree.map(lambda x: x[:, t], inputs)
     reset_t = jax.tree.map(lambda x: x[:, t], is_reset)
 
-    # Returns ((out, state), params)
-    (out_t, current_state), current_params = core.step(
+    # Returns ((out, state), params).
+    (out_t, current_state), current_params = step_fn(
       current_params, inputs_t, current_state, reset_t, is_training
     )
     outputs_list.append(out_t)
@@ -826,22 +854,24 @@ def static_scan(
 
 
 def dynamic_scan(
-  core: RNNCore[InputT, StateT, OutputT, ResetT],
+  step_fn: StepFn[InputsT, StateT, OutputsT, ResetT],
   params: Params,
-  inputs: InputT,
+  inputs: InputsT,
   prev_state: StateT,
   is_reset: ResetT | None,
   is_training: bool,
-) -> tuple[tuple[OutputT, StateT], Params]:
+) -> tuple[tuple[OutputsT, StateT], Params]:
   """Performs a compiled jax.lax.scan over the time dimension.
 
   This uses XLA compilation for high performance on long sequences.
 
   Args:
-    core: The RNN module implementing the `step` method.
+    step_fn: A callable that processes a single time step. Signature:
+      (params, inputs, state, is_reset, is_training) -> ((output, state), params)
+      This can be a method like `model.__call__` or a partial function.
     params: The parameters container.
     inputs: Input sequence Pytree [Batch, Time, ...].
-    prev_state: Initial state (must be initialized).
+    prev_state: Initial state.
     is_reset: Optional reset signal [Batch, Time].
     is_training: Training flag.
 
@@ -851,51 +881,63 @@ def dynamic_scan(
   Raises:
     ValueError: If inputs have invalid rank.
   """
-  for x in jax.tree.leaves(inputs):
+  leaves = jax.tree.leaves(inputs)
+  for x in leaves:
     if x.ndim < 2:
       raise ValueError(f'Input leaves must have rank >= 2, got {x.ndim}.')
 
+  # Verify all inputs have the same time dimension.
+  T = leaves[0].shape[1]
+  for x in leaves:
+    chex.assert_axis_dimension(x, axis=1, expected=T)
+
   if not params.initialized:
-    return _scan_init(core, params, inputs, prev_state, is_reset, is_training)
+    return _scan_init(
+      step_fn, params, inputs, prev_state, is_reset, is_training
+    )
 
   # Swap to [Time, Batch, ...]
   inputs_t = jax.tree.map(_swap_batch_time, inputs)
   reset_scan = jax.tree.map(_swap_batch_time, is_reset)
 
-  def scan_fn(carry: Any, scan_inputs: Any) -> tuple[Any, Any]:
+  def scan_body(carry: Any, scan_inputs: Any) -> tuple[Any, Any]:
     curr_state, curr_params = carry
     inputs_step, reset_step = scan_inputs
 
-    (out, next_state), next_params = core.step(
+    (out, next_state), next_params = step_fn(
       curr_params, inputs_step, curr_state, reset_step, is_training
     )
     # scan expects ((next_carry), output)
     return (next_state, next_params), out
 
   (final_state, final_params), outputs_t = jax.lax.scan(
-    scan_fn, (prev_state, params), (inputs_t, reset_scan)
+    scan_body, (prev_state, params), (inputs_t, reset_scan)
   )
 
   outputs = jax.tree.map(_swap_batch_time, outputs_t)
   return (outputs, final_state), final_params
 
 
-class Sequential(Module, Generic[InputT, StateT, OutputT, ResetT]):
-  """Interface for sequential time-series modules.
+class SequenceBase(Module, Generic[InputsT, StateT, OutputsT, ResetT]):
+  """Base class for sequence-processing modules.
 
-  This abstract class allows modules to define operations on sequences.
-  It supports both 'chunk' processing (Transformers) and 'step' processing (RNNs).
-  Unlike the base Module, Sequential enforces a specific call signature.
+  This abstract class defines the interface for modules that process sequences.
+  It supports both 'chunk' processing (e.g., Transformers) and 'step' processing
+  (e.g., RNNs). Unlike the base Module, SequenceBase enforces a specific
+  call signature.
+
+  The primary method is `__call__` for single-step processing. For sequence
+  processing, use `apply` which internally uses `static_scan` or `dynamic_scan`.
   """
 
   def initial_state(
-    self, params: Params, inputs: InputT
+    self, params: Params, inputs: InputsT
   ) -> tuple[StateT, Params]:
     """Computes the initial state for the sequence processing.
 
     Args:
       params: The parameters container.
-      inputs: The input sequence Pytree. Used to infer batch size or other
+      inputs: The input Pytree. Used to infer batch size or other
         structural properties.
 
     Returns:
@@ -903,58 +945,42 @@ class Sequential(Module, Generic[InputT, StateT, OutputT, ResetT]):
     """
     raise NotImplementedError
 
-  def step(
+  def __call__(
     self,
     params: Params,
-    inputs: InputT,
+    inputs: InputsT,
     prev_state: StateT | None,
     is_reset: ResetT | None = None,
     is_training: bool = True,
-  ) -> tuple[tuple[OutputT, StateT], Params]:
+  ) -> tuple[tuple[OutputsT, StateT], Params]:
     """Processes a single time step of data.
 
-    Default behavior: Wraps __call__ by adding a fake time dimension.
-    This allows Sequence models (like Attention) to work step-by-step.
+    This is the primary method that subclasses must implement.
 
     Args:
       params: The parameters container.
       inputs: The input step Pytree. Leaves should have shape [Batch, ...].
-      prev_state: The previous recurrent state.
+      prev_state: The previous state.
       is_reset: Optional reset signal. Leaves should have shape [Batch].
       is_training: Boolean flag indicating if the model is in training mode.
 
     Returns:
       A nested tuple ((output, new_state), updated_params).
-
-    Raises:
-      ValueError: If inputs have rank < 1.
     """
-    for x in jax.tree.leaves(inputs):
-      if x.ndim < 1:
-        raise ValueError('Input leaves must have at least rank 1 (Batch).')
+    raise NotImplementedError
 
-    # Add time dim: [B, ...] -> [B, 1, ...]
-    inputs_seq = jax.tree.map(lambda x: x[:, None], inputs)
-    is_reset_seq = jax.tree.map(lambda x: x[:, None], is_reset)
-
-    ((out_seq, new_state), new_params) = self.__call__(
-      params, inputs_seq, prev_state, is_reset_seq, is_training
-    )
-
-    # Remove time dim: [B, 1, ...] -> [B, ...]
-    out = jax.tree.map(lambda x: x.squeeze(axis=1), out_seq)
-
-    return (out, new_state), new_params
-
-  def __call__(
+  def apply(
     self,
     params: Params,
-    inputs: InputT,
+    inputs: InputsT,
     prev_state: StateT | None = None,
     is_reset: ResetT | None = None,
     is_training: bool = True,
-  ) -> tuple[tuple[OutputT, StateT], Params]:
+  ) -> tuple[tuple[OutputsT, StateT], Params]:
     """Processes a sequence of data [Batch, Time, ...].
+
+    Default behavior: Wraps __call__ by iterating over the time dimension.
+    Subclasses may override this for more efficient sequence processing.
 
     Args:
       params: The parameters container.
@@ -971,20 +997,24 @@ class Sequential(Module, Generic[InputT, StateT, OutputT, ResetT]):
     raise NotImplementedError
 
 
-class RNNCore(Sequential[InputT, StateT, OutputT, ResetT]):
+class RecurrenceBase(SequenceBase[InputsT, StateT, OutputsT, ResetT]):
   """Base class for Recurrent Neural Networks (RNNs).
 
-  Implements the sequence loop by scanning over the `step` method.
+  Implements sequence processing by scanning over the `__call__` method.
   Handles automatic fallback to static unrolling during initialization.
+
+  Subclasses must implement:
+  - `initial_state`: Returns the initial hidden state.
+  - `__call__`: Processes a single time step.
   """
 
   def __init__(self, graph: Graph, is_static: bool = False) -> None:
-    """Initializes the RNNCore.
+    """Initializes the RecurrenceBase.
 
     Args:
       graph: The graph node for this module.
       is_static: If True, forces the use of Python loops (`static_scan`).
-        If False, attempts to use `dynamic_scan` (jax.lax.scan).
+        If False, uses `dynamic_scan` (jax.lax.scan) for better performance.
     """
     super().__init__(graph)
     self._is_static = is_static
@@ -1003,7 +1033,7 @@ class RNNCore(Sequential[InputT, StateT, OutputT, ResetT]):
     self,
     params: Params,
     prev_state: StateT,
-    inputs: InputT,
+    inputs: InputsT,
     is_reset: ResetT | None = None,
   ) -> StateT:
     """Helper to reset state based on boolean signal.
@@ -1033,15 +1063,15 @@ class RNNCore(Sequential[InputT, StateT, OutputT, ResetT]):
       )
     return cast(StateT, state)
 
-  def step(
+  def __call__(
     self,
     params: Params,
-    inputs: InputT,
+    inputs: InputsT,
     prev_state: StateT | None,
     is_reset: ResetT | None = None,
     is_training: bool = True,
-  ) -> tuple[tuple[OutputT, StateT], Params]:
-    """Computes the output and new state for a single time step.
+  ) -> tuple[tuple[OutputsT, StateT], Params]:
+    """Processes a single time step of data.
 
     This method must be implemented by subclasses.
 
@@ -1057,20 +1087,20 @@ class RNNCore(Sequential[InputT, StateT, OutputT, ResetT]):
     """
     raise NotImplementedError
 
-  def __call__(
+  def apply(
     self,
     params: Params,
-    inputs: InputT,
+    inputs: InputsT,
     prev_state: StateT | None = None,
     is_reset: ResetT | None = None,
     is_training: bool = True,
-  ) -> tuple[tuple[OutputT, StateT], Params]:
-    """Orchestrates the scan loop.
+  ) -> tuple[tuple[OutputsT, StateT], Params]:
+    """Processes a sequence by scanning over __call__.
 
-    This method includes an automatic optimization: if the parameters are not
+    This method automatically handles initialization: if parameters are not
     yet initialized, it forces a single-step execution expanded to the full
-    sequence length. This ensures parameters are created safely without
-    violating JAX scan invariants.
+    sequence length to safely create parameters without violating JAX scan
+    invariants.
 
     Args:
       params: The parameters container.
@@ -1094,11 +1124,13 @@ class RNNCore(Sequential[InputT, StateT, OutputT, ResetT]):
       if x.ndim < 2:
         raise ValueError('Input leaves must have rank >= 2.')
 
+    # Cast self to help type inference with generic parameters.
+    step_fn = cast(StepFn[InputsT, StateT, OutputsT, ResetT], self)
     if self.is_static:
       return static_scan(
-        self, params, inputs, prev_state, is_reset, is_training
+        step_fn, params, inputs, prev_state, is_reset, is_training
       )
     else:
       return dynamic_scan(
-        self, params, inputs, prev_state, is_reset, is_training
+        step_fn, params, inputs, prev_state, is_reset, is_training
       )

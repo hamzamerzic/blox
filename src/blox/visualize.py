@@ -136,11 +136,6 @@ def _view(graph: Graph, params: Params, is_root: bool = True) -> NodeView:
       param_name = key[-1]
       my_params[param_name] = value
 
-  # Special case: If we are at the root, show the rng variable.
-  rng_key = ('rng',)
-  if is_root and rng_key in params._data:
-    my_params['rng'] = params._data[rng_key]
-
   my_modules = {}
   for name, child_node in graph._children.items():
     my_modules[name] = _view(child_node, params, is_root=False)

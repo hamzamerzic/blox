@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "jax-blox"
-version = "0.1.1.post1"
-description = "A minimal, explicit, and functional neural network library for JAX."
+version = "0.1.2"
+description = "A functional and lightweight neural network library for JAX."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { file = "LICENSE" }
@@ -38,7 +38,7 @@ dev = [
     "pytest",
     "pytest-cov",  # For coverage reports
     "ruff",        # For modern linting
-    "pyrefly",        # For type checking
+    "pyrefly",     # For type checking
 ]
 
 [tool.hatch.build.targets.wheel]

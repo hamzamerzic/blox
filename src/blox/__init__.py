@@ -3,8 +3,9 @@ from .interfaces import (
   Module,
   Param,
   Params,
-  Sequential,
-  RNNCore,
+  Rng,
+  SequenceBase,
+  RecurrenceBase,
   static_scan,
   dynamic_scan,
 )
@@ -16,6 +17,7 @@ from .blocks import (
   Dropout,
   LayerNorm,
   RMSNorm,
+  BatchNorm,
   Conv,
   max_pool,
   avg_pool,
@@ -28,6 +30,7 @@ __all__ = [
   'Module',
   'Param',
   'Params',
+  'Rng',
   'display',
   # Layers.
   'Embed',
@@ -36,12 +39,13 @@ __all__ = [
   'Dropout',
   'LayerNorm',
   'RMSNorm',
+  'BatchNorm',
   # Pooling.
   'max_pool',
   'avg_pool',
-  # Sequential.
-  'Sequential',
-  'RNNCore',
+  # Sequence processing.
+  'SequenceBase',
+  'RecurrenceBase',
   'LSTM',
   'LSTMState',
   'static_scan',

@@ -12,15 +12,15 @@ def test_slash_in_module_name():
   layer = bx.Linear(graph.child('encoder/decoder'), output_size=10)
 
   x = jnp.ones((2, 5))
-  params = bx.Params(seed=0)
+  params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=0))
 
   y, params = layer(params, x)
   params = params.finalize()
 
   assert y.shape == (2, 10)
   # Path should be a tuple with the slash preserved in the name.
-  assert ('root', 'encoder/decoder', 'w') in params._data
-  assert ('root', 'encoder/decoder', 'b') in params._data
+  assert ('root', 'encoder/decoder', 'kernel') in params._data
+  assert ('root', 'encoder/decoder', 'bias') in params._data
 
 
 def test_slash_in_variable_name():
@@ -41,7 +41,7 @@ def test_slash_in_variable_name():
   layer = CustomModule(graph.child('custom'))
 
   x = jnp.ones((2, 5))
-  params = bx.Params(seed=0)
+  params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=0))
 
   _, params = layer(params, x)
   params = params.finalize()
@@ -65,7 +65,7 @@ def test_special_characters_in_names():
   ]
 
   x = jnp.ones((2, 5))
-  params = bx.Params(seed=0)
+  params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=0))
 
   for name in special_names:
     layer = bx.Linear(graph.child(name), output_size=3)
@@ -75,7 +75,7 @@ def test_special_characters_in_names():
 
   # All should be present.
   for name in special_names:
-    assert ('root', name, 'w') in params._data, f'Failed for name: {name}'
+    assert ('root', name, 'kernel') in params._data, f'Failed for name: {name}'
 
 
 def test_nested_slashes():
@@ -86,7 +86,7 @@ def test_nested_slashes():
   layer = bx.Linear(child2.child('proj/out'), output_size=5)
 
   x = jnp.ones((2, 3))
-  params = bx.Params(seed=0)
+  params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=0))
 
   _, params = layer(params, x)
   params = params.finalize()
@@ -97,7 +97,7 @@ def test_nested_slashes():
     'encoder/layer',
     'attention/head',
     'proj/out',
-    'w',
+    'kernel',
   )
   assert expected_path in params._data
 
@@ -108,7 +108,7 @@ def test_split_with_special_characters():
   layer = bx.Linear(graph.child('layer/1'), output_size=3)
 
   x = jnp.ones((2, 5))
-  params = bx.Params(seed=0)
+  params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=0))
 
   _, params = layer(params, x)
   params = params.finalize()
@@ -117,12 +117,12 @@ def test_split_with_special_characters():
   trainable, non_trainable = params.split()
 
   # Trainable should have the layer params.
-  assert ('root', 'layer/1', 'w') in trainable._data
-  assert ('root', 'layer/1', 'b') in trainable._data
+  assert ('root', 'layer/1', 'kernel') in trainable._data
+  assert ('root', 'layer/1', 'bias') in trainable._data
 
-  # Non-trainable should have RNG.
-  assert ('rng', 'key') in non_trainable._data
-  assert ('rng', 'counter') in non_trainable._data
+  # Non-trainable should have RNG (stored under Rng module's graph path).
+  assert ('root', 'rng', 'key') in non_trainable._data
+  assert ('root', 'rng', 'counter') in non_trainable._data
 
 
 def test_graph_repr_with_special_characters():
@@ -133,3 +133,23 @@ def test_graph_repr_with_special_characters():
   # Repr should format as path string with /.
   repr_str = repr(child)
   assert 'model/v1/layer/1' in repr_str
+
+
+def test_custom_split():
+  """Verifies Graph repr handles special characters correctly."""
+  graph = bx.Graph('model/v1')
+  layer = bx.Linear(graph.child('layer/1'), output_size=3)
+
+  x = jnp.ones((2, 5))
+  params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=0))
+  _, params = layer(params, x)
+  params = params.finalize()
+
+  kernel, rest = params.split(lambda path, param: path[-1] == 'kernel')
+
+  assert len(kernel._data) == 1
+  assert ('model/v1', 'layer/1', 'kernel') in kernel._data
+
+  assert ('model/v1', 'layer/1', 'bias') in rest._data
+  assert ('model/v1', 'rng', 'key') in rest._data
+  assert ('model/v1', 'rng', 'counter') in rest._data

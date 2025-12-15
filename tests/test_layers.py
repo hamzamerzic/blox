@@ -12,7 +12,7 @@ def test_linear_shapes():
   # Input has 5 features.
   x = jnp.ones((2, 5))
   # Initialize params with a seed.
-  params = bx.Params(seed=0)
+  params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=0))
 
   y, params = layer(params, x)
 
@@ -21,25 +21,25 @@ def test_linear_shapes():
 
   # Check params existed.
   frozen = params.finalize()
-  # Path is ('root', 'linear', 'w') because graph was "root" -> child("linear").
+  # Path is ('root', 'linear', 'kernel') because graph was "root" -> child("linear").
   # Note: Access .value because _data stores Param objects.
-  w_shape = frozen._data[('root', 'linear', 'w')].value.shape
-  b_shape = frozen._data[('root', 'linear', 'b')].value.shape
+  kernel_shape = frozen._data[('root', 'linear', 'kernel')].value.shape
+  bias_shape = frozen._data[('root', 'linear', 'bias')].value.shape
 
-  assert w_shape == (5, 10)
-  assert b_shape == (10,)
+  assert kernel_shape == (5, 10)
+  assert bias_shape == (10,)
 
 
 def test_linear_learning():
   """Verifies that gradients propagate through the layer."""
   graph = bx.Graph('net')
-  layer = bx.Linear(graph.child('linear'), output_size=1, with_bias=False)
+  layer = bx.Linear(graph.child('linear'), output_size=1, use_bias=False)
 
   x = jnp.array([[1.0, 2.0]])
   y_target = jnp.array([[5.0]])
 
   # Initialize params with a seed.
-  params = bx.Params(seed=42)
+  params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=42))
 
   # Initialize.
   _, params = layer(params, x)
