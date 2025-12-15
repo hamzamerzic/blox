@@ -217,3 +217,97 @@ def test_conv_depthwise():
   # Kernel shape: (3, 3, 1, 8) - one filter per channel.
   kernel_shape = params._data[('root', 'conv', 'kernel')].value.shape
   assert kernel_shape == (3, 3, 1, 8)
+
+
+def test_conv_transpose_2d_shapes():
+  """Verifies 2D ConvTranspose output shapes."""
+  graph = bx.Graph('root')
+  conv_t = bx.ConvTranspose(
+    graph.child('conv_t'), output_channels=3, kernel_size=(3, 3), strides=(2, 2)
+  )
+
+  # Input: [batch, height, width, channels]
+  x = jnp.ones((1, 14, 14, 32))
+  params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=0))
+
+  y, _ = conv_t(params, x)
+
+  # Output size for SAME padding with stride S: output_size = input_size * S
+  assert y.shape == (1, 28, 28, 3)
+
+
+def test_conv_transpose_valid_padding():
+  """Verifies ConvTranspose with VALID padding."""
+  graph = bx.Graph('root')
+  conv_t = bx.ConvTranspose(
+    graph.child('conv_t'),
+    output_channels=1,
+    kernel_size=(3, 3),
+    strides=(1, 1),
+    padding='VALID',
+  )
+
+  # Input: [batch, height, width, channels]
+  x = jnp.ones((1, 2, 2, 16))
+  params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=0))
+
+  y, _ = conv_t(params, x)
+
+  # Output size for VALID padding: output_size = (input_size - 1) * strides + kernel_size
+  # (2-1)*1 + 3 = 4
+  assert y.shape == (1, 4, 4, 1)
+
+
+def test_conv_transpose_kernel_shape():
+  """Verifies ConvTranspose kernel shape."""
+  graph = bx.Graph('root')
+  conv_t = bx.ConvTranspose(
+    graph.child('conv_t'), output_channels=3, kernel_size=(4, 4)
+  )
+
+  x = jnp.ones((1, 8, 8, 16))
+  params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=0))
+
+  _, params = conv_t(params, x)
+  params = params.finalize()
+
+  # Kernel shape for ConvTranspose: (kernel_h, kernel_w, output_channels, input_channels)
+  kernel_shape = params._data[('root', 'conv_t', 'kernel')].value.shape
+  assert kernel_shape == (4, 4, 3, 16)
+
+
+def test_conv_transpose_1d_shapes():
+  """Verifies 1D ConvTranspose output shapes."""
+  graph = bx.Graph('root')
+  conv_t = bx.ConvTranspose(
+    graph.child('conv_t'), output_channels=8, kernel_size=3, strides=2
+  )
+
+  # [batch, length, channels]
+  x = jnp.ones((1, 10, 4))
+  params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=0))
+
+  y, _ = conv_t(params, x)
+
+  # Length 10, stride 2 -> 20
+  assert y.shape == (1, 20, 8)
+
+
+def test_conv_transpose_3d_shapes():
+  """Verifies 3D ConvTranspose output shapes."""
+  graph = bx.Graph('root')
+  conv_t = bx.ConvTranspose(
+    graph.child('conv_t'),
+    output_channels=4,
+    kernel_size=(2, 2, 2),
+    strides=(2, 2, 2),
+  )
+
+  # [batch, depth, height, width, channels]
+  x = jnp.ones((1, 4, 4, 4, 2))
+  params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=0))
+
+  y, _ = conv_t(params, x)
+
+  # 4x4x4 -> 8x8x8
+  assert y.shape == (1, 8, 8, 8, 4)

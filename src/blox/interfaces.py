@@ -10,6 +10,7 @@ It is designed to be strictly typed and utilizes chex for runtime shape checking
 """
 
 from __future__ import annotations
+import abc
 import inspect
 from typing import Any, Callable, Generic, TypeVar, cast
 
@@ -552,7 +553,7 @@ jax.tree_util.register_pytree_node(
 # ==============================================================================
 
 
-class Module:
+class Module(abc.ABC):
   """Base class for Neural Network layers.
 
   All layers should inherit from this class. It provides the connection to the
@@ -592,12 +593,34 @@ class Module:
     # Register the class name.
     self.graph.metadata['__type__'] = self.__class__.__name__
 
-    # Walk back up the stack to find the subclass __init__ frame.
-    frame = inspect.currentframe().f_back.f_back  # type: ignore
+    # Start at the frame calling this method (Module.__init__)
+    current_frame = inspect.currentframe()
+    if current_frame is None:
+      return
 
-    if frame:
+    frame = current_frame.f_back
+
+    # Walk up the stack to find the *first* frame that is NOT Module.__init__
+    # but still belongs to 'self'. This handles arbitrary inheritance depth.
+    target_frame = None
+
+    while frame:
+      # We look for the __init__ method of the actual instance.
+      if (
+        frame.f_code.co_name == '__init__'
+        and frame.f_locals.get('self') is self
+      ):
+        # We found a valid __init__ for this object.
+        # Update target_frame and keep going up to find the most specific subclass.
+        target_frame = frame
+        frame = frame.f_back
+      else:
+        # We stepped out of the constructor chain. Stop.
+        break
+
+    if target_frame:
       # Get explicit argument names and values.
-      arg_info = inspect.getargvalues(frame)
+      arg_info = inspect.getargvalues(target_frame)
 
       config = {}
 
@@ -613,6 +636,15 @@ class Module:
       clean_config = {k: v for k, v in config.items() if not k.startswith('_')}
 
       self.graph.metadata.update(clean_config)
+
+  @abc.abstractmethod
+  def __call__(
+    self,
+    params: Params,
+    *args: Any,
+    **kwargs: Any,
+  ) -> tuple[Any, Params]:
+    """Applies the module."""
 
   def get_param(
     self,
@@ -930,6 +962,7 @@ class SequenceBase(Module, Generic[InputsT, StateT, OutputsT, ResetT]):
   processing, use `apply` which internally uses `static_scan` or `dynamic_scan`.
   """
 
+  @abc.abstractmethod
   def initial_state(
     self, params: Params, inputs: InputsT
   ) -> tuple[StateT, Params]:
@@ -943,8 +976,8 @@ class SequenceBase(Module, Generic[InputsT, StateT, OutputsT, ResetT]):
     Returns:
       A tuple containing the initial state and the parameters container.
     """
-    raise NotImplementedError
 
+  @abc.abstractmethod
   def __call__(
     self,
     params: Params,
@@ -967,8 +1000,8 @@ class SequenceBase(Module, Generic[InputsT, StateT, OutputsT, ResetT]):
     Returns:
       A nested tuple ((output, new_state), updated_params).
     """
-    raise NotImplementedError
 
+  @abc.abstractmethod
   def apply(
     self,
     params: Params,
@@ -979,8 +1012,9 @@ class SequenceBase(Module, Generic[InputsT, StateT, OutputsT, ResetT]):
   ) -> tuple[tuple[OutputsT, StateT], Params]:
     """Processes a sequence of data [Batch, Time, ...].
 
-    Default behavior: Wraps __call__ by iterating over the time dimension.
-    Subclasses may override this for more efficient sequence processing.
+    This method processes entire sequences, either step-by-step, which is the
+    default behavior of RNN modules (see RecurrenceBase below), or in full,
+    which is the default behavior of Transformer and Attention modules.
 
     Args:
       params: The parameters container.
@@ -994,7 +1028,6 @@ class SequenceBase(Module, Generic[InputsT, StateT, OutputsT, ResetT]):
     Returns:
       A nested tuple ((outputs, final_state), updated_params).
     """
-    raise NotImplementedError
 
 
 class RecurrenceBase(SequenceBase[InputsT, StateT, OutputsT, ResetT]):

@@ -3,6 +3,78 @@ import blox as bx
 import pytest
 
 
+def test_gru_sequence_shapes():
+  """Verifies GRU input [B, T, D] -> output [B, T, Hidden]."""
+  graph = bx.Graph('root')
+  gru = bx.GRU(graph.child('gru'), hidden_size=12)
+
+  # Batch=2, Time=5, Dim=4
+  inputs = jnp.ones((2, 5, 4))
+  params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=0))
+
+  # Explicitly initialize state.
+  state, params = gru.initial_state(params, inputs)
+
+  # apply() processes sequences, returns ((out, state), params).
+  ((out, state), params) = gru.apply(params, inputs, state)
+
+  # Output should match batch and time dims.
+  assert out.shape == (2, 5, 12)
+  # Final state is [B, Hidden].
+  assert state.hidden.shape == (2, 12)
+
+
+def test_gru_reset_logic():
+  """Verifies that is_reset forces the GRU state to zero."""
+  graph = bx.Graph('root')
+  gru = bx.GRU(graph.child('gru'), hidden_size=5)
+
+  # Batch=1, Time=3
+  inputs = jnp.ones((1, 3, 2))
+  params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=0))
+
+  # Initialization pass
+  initial_state, params = gru.initial_state(params, inputs)
+  ((_, _), params) = gru.apply(params, inputs, initial_state)
+  params = params.finalize()
+
+  # Reset at t=1.
+  reset = jnp.array([[False, True, False]])
+
+  ((out, _), params) = gru.apply(params, inputs, initial_state, is_reset=reset)
+
+  out_0 = out[0, 0]
+  out_1 = out[0, 1]
+
+  # The output at t=1 (reset) should be close to output at t=0 (initial step from zero state)
+  # assuming inputs are same (they are ones).
+  assert jnp.allclose(out_0, out_1, atol=1e-5)
+
+
+def test_gru_static_vs_dynamic():
+  """Ensures GRU loop (static) and scan (dynamic) produce identical results."""
+  graph = bx.Graph('root')
+  gru = bx.GRU(graph.child('gru'), hidden_size=5, is_static=False)
+
+  inputs = jnp.ones((2, 10, 4))
+  params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=42))
+
+  # Initialization
+  state, params = gru.initial_state(params, inputs)
+  ((_, _), params) = gru.apply(params, inputs, state)
+  params = params.finalize()
+
+  # Dynamic
+  gru.is_static = False
+  ((y_dyn, _), _) = gru.apply(params, inputs, state)
+
+  # Static
+  gru.is_static = True
+  ((y_stat, _), _) = gru.apply(params, inputs, state)
+
+  assert jnp.allclose(y_dyn, y_stat, atol=1e-5)
+
+
 def test_lstm_sequence_shapes():
   """Verifies input [B, T, D] -> output [B, T, Hidden]."""
   graph = bx.Graph('root')

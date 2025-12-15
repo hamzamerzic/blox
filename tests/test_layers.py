@@ -94,3 +94,62 @@ def test_root_node_protection():
     bx.Linear(graph.child('safe_layer'), output_size=10)
   except ValueError:
     raise AssertionError('Module failed to bind to a valid child node.')
+
+
+def test_sequential_chaining():
+  """Verifies Sequential correctly chains layers and functions."""
+  graph = bx.Graph('root')
+  model = bx.Sequential(
+    graph.child('seq'),
+    [
+      bx.Linear(graph.child('l1'), output_size=10),
+      jax.nn.relu,
+      bx.Linear(graph.child('l2'), output_size=5),
+    ],
+  )
+
+  x = jnp.ones((2, 20))  # Batch=2, Features=20
+  params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=0))
+
+  y, params = model(params, x)
+
+  assert y.shape == (2, 5)
+
+
+def test_sequential_empty():
+  """Verifies Sequential with empty layers acts as identity."""
+  graph = bx.Graph('root')
+  model = bx.Sequential(graph.child('seq'), [])
+
+  x = jnp.ones((2, 5))
+  params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=0))
+
+  y, _ = model(params, x)
+  assert jnp.allclose(y, x)
+
+
+def test_sequential_nested():
+  """Verifies nested Sequential modules."""
+  graph = bx.Graph('root')
+  inner = bx.Sequential(
+    graph.child('inner'), [bx.Linear(graph.child('l1'), output_size=5)]
+  )
+  outer = bx.Sequential(graph.child('outer'), [inner, jax.nn.relu])
+
+  x = jnp.ones((2, 10))
+  params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=0))
+
+  y, params = outer(params, x)
+  assert y.shape == (2, 5)
+
+
+def test_sequential_lambda():
+  """Verifies Sequential with a lambda layer."""
+  graph = bx.Graph('root')
+  model = bx.Sequential(graph.child('seq'), [lambda x: x * 2])
+
+  x = jnp.ones((2, 5))
+  params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=0))
+
+  y, _ = model(params, x)
+  assert jnp.allclose(y, x * 2)

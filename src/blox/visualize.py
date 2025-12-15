@@ -126,8 +126,7 @@ def _view(graph: Graph, params: Params, is_root: bool = True) -> NodeView:
   """Internal helper to recursively build the NodeView."""
   my_params = {}
   # Access private data for visualization purposes.
-  # pylint: disable=protected-access
-  for key, value in params._data.items():
+  for key, value in params._data.items():  # pylint: disable=protected-access
     # Check if this param belongs to this graph node (direct child).
     # key is a tuple like ('root', 'linear', 'w')
     # graph.path is a tuple like ('root', 'linear')

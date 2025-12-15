@@ -4,7 +4,7 @@ This module contains implementations of common layers like Linear and LSTM.
 It serves as the user-facing library of pre-built components.
 """
 
-from typing import Any, NamedTuple, Sequence
+from typing import Any, Callable, NamedTuple, Sequence
 
 import jax
 import jax.numpy as jnp
@@ -22,7 +22,9 @@ class Embed(bx.Module):
   applies the transpose of the embedding matrix (useful for output projections).
 
   Example:
-    embed = Embed(graph / 'embed', num_embeddings=10000, embedding_size=512)
+    embed = Embed(
+      graph.child('embed'), num_embeddings=10000, embedding_size=512
+    )
 
     # Forward pass: indices -> embeddings
     embeddings, params = embed(params, token_ids)
@@ -37,6 +39,7 @@ class Embed(bx.Module):
     num_embeddings: int,
     embedding_size: int,
     embedding_init: Initializer | None = None,
+    embedding_metadata: dict[str, Any] | None = None,
   ) -> None:
     """Initializes the Embed module.
 
@@ -45,10 +48,12 @@ class Embed(bx.Module):
       num_embeddings: Size of the vocabulary (number of unique tokens).
       embedding_size: Dimensionality of the embedding vectors.
       embedding_init: Initializer for the embedding matrix. Defaults to normal.
+      embedding_metadata: Optional metadata for the embedding parameter.
     """
     super().__init__(graph)
     self.num_embeddings = num_embeddings
     self.embedding_size = embedding_size
+    self.embedding_metadata = embedding_metadata
     if embedding_init is not None:
       self.embedding_init = embedding_init
     else:
@@ -71,10 +76,11 @@ class Embed(bx.Module):
       A tuple (embeddings, params). Embeddings have shape [..., embedding_size].
     """
     embedding_matrix, params = self.get_param(
-      params,
-      'embedding',
-      (self.num_embeddings, self.embedding_size),
-      self.embedding_init,
+      params=params,
+      name='embedding',
+      shape=(self.num_embeddings, self.embedding_size),
+      init=self.embedding_init,
+      metadata=self.embedding_metadata,
     )
     return embedding_matrix[indices], params
 
@@ -96,10 +102,11 @@ class Embed(bx.Module):
       A tuple (logits, params). Logits have shape [..., num_embeddings].
     """
     embedding_matrix, params = self.get_param(
-      params,
-      'embedding',
-      (self.num_embeddings, self.embedding_size),
-      self.embedding_init,
+      params=params,
+      name='embedding',
+      shape=(self.num_embeddings, self.embedding_size),
+      init=self.embedding_init,
+      metadata=self.embedding_metadata,
     )
     # inputs @ embedding_matrix.T
     return jnp.dot(inputs, embedding_matrix.T), params
@@ -197,6 +204,66 @@ class Linear(bx.Module):
     return outputs, params
 
 
+class Sequential(bx.Module):
+  """A sequential container.
+
+  Modules will be added to it in the order they are passed in the constructor.
+  Alternatively, an ordered dict of modules can also be passed in.
+
+  Example:
+    mlp = Sequential(
+      graph.child('mlp'),
+      [
+        bx.Linear(graph.child('l1'), 32),
+        jax.nn.relu,
+        bx.Linear(graph.child('l2'), 10),
+      ],
+    )
+    y, params = mlp(params, x)
+  """
+
+  def __init__(
+    self,
+    graph: bx.Graph,
+    layers: Sequence[bx.Module | Callable[[jax.Array], jax.Array]],
+  ) -> None:
+    """Initializes the Sequential module.
+
+    Args:
+      graph: The graph node for this module.
+      layers: A list of blox Modules or callables.
+        If a layer is a blox Module, it must accept (params, inputs) and return
+        (output, params).
+        If a layer is a simple callable (like jax.nn.relu), it must accept
+        inputs and return output.
+    """
+    super().__init__(graph)
+    self.layers = layers
+
+  def __call__(
+    self,
+    params: bx.Params,
+    inputs: jax.Array,
+  ) -> tuple[jax.Array, bx.Params]:
+    """Applies the sequential model.
+
+    Args:
+      params: The parameters container.
+      inputs: The input array.
+
+    Returns:
+      A tuple (output, params).
+    """
+    x = inputs
+    for layer in self.layers:
+      if isinstance(layer, bx.Module):
+        x, params = layer(params, x)
+      else:
+        # Assume it's a pure activation function like jax.nn.relu.
+        x = layer(x)
+    return x, params
+
+
 class LSTMState(NamedTuple):
   """Holds the hidden and cell states for an LSTM."""
 
@@ -206,6 +273,19 @@ class LSTMState(NamedTuple):
 
 class LSTM(bx.RecurrenceBase[jax.Array, LSTMState, jax.Array, jax.Array]):
   """Long Short-Term Memory (LSTM) Recurrent Neural Network.
+
+  The mathematical definition of the cell is as follows:
+
+  .. math::
+      i = \\sigma(W_{ii} x + W_{hi} h + b_{hi}) \\\\
+      f = \\sigma(W_{if} x + W_{hf} h + b_{hf}) \\\\
+      g = \\tanh(W_{ig} x + W_{hg} h + b_{hg}) \\\\
+      o = \\sigma(W_{io} x + W_{ho} h + b_{ho}) \\\\
+      c' = f * c + i * g \\\\
+      h' = o * \\tanh(c')
+
+  where x is the input, h is the output of the previous time step, and c is
+  the memory.
 
   This module implements a standard LSTM cell. It inherits from RecurrenceBase,
   automatically providing support for both single-step execution (`__call__`)
@@ -311,6 +391,112 @@ class LSTM(bx.RecurrenceBase[jax.Array, LSTMState, jax.Array, jax.Array]):
     new_state = LSTMState(hidden=h, cell=c)
 
     # Output is h, state is (h, c).
+    return (h, new_state), params
+
+
+class GRUState(NamedTuple):
+  """Holds the hidden state for a GRU."""
+
+  hidden: jax.Array
+
+
+class GRU(bx.RecurrenceBase[jax.Array, GRUState, jax.Array, jax.Array]):
+  """Gated Recurrent Unit (GRU).
+
+  The mathematical definition of the cell is as follows:
+
+  .. math::
+      r = \\sigma(W_{ir} x + W_{hr} h + b_{hr}) \\\\
+      z = \\sigma(W_{iz} x + W_{hz} h + b_{hz}) \\\\
+      n = \\tanh(W_{in} x + b_{in} + r * (W_{hn} h + b_{hn})) \\\\
+      h' = (1 - z) * n + z * h
+
+  where x is the input and h is the output of the previous time step.
+
+  Example:
+    gru = GRU(graph.child('gru'), hidden_size=128)
+    state, params = gru.initial_state(params, inputs)
+    (outputs, state), params = gru(params, inputs, state)
+  """
+
+  def __init__(
+    self,
+    graph: bx.Graph,
+    hidden_size: int,
+    is_static: bool = False,
+  ) -> None:
+    """Initializes the GRU.
+
+    Args:
+      graph: The graph node for this module.
+      hidden_size: The dimensionality of the hidden state.
+      is_static: If True, uses Python loops. If False, uses jax.lax.scan.
+    """
+    super().__init__(graph, is_static)
+    self.hidden_size = hidden_size
+    # We use two linear layers:
+    # Update and reset gates (z, r) computed from x and h.
+    # Candidate hidden state (h_tilde) computed from x and (r * h).
+    self.gates = Linear(graph.child('gates'), output_size=2 * hidden_size)
+    self.candidate = Linear(graph.child('candidate'), output_size=hidden_size)
+
+  def initial_state(
+    self, params: bx.Params, inputs: jax.Array
+  ) -> tuple[GRUState, bx.Params]:
+    """Creates the initial zero state.
+
+    Args:
+      params: The parameters container.
+      inputs: The input array, used to infer the batch size (dimension 0).
+
+    Returns:
+      A tuple (GRUState, params).
+    """
+    batch_size = inputs.shape[0]
+    return GRUState(hidden=jnp.zeros((batch_size, self.hidden_size))), params
+
+  def __call__(
+    self,
+    params: bx.Params,
+    inputs: jax.Array,
+    prev_state: GRUState | None,
+    is_reset: jax.Array | None = None,
+    is_training: bool = True,
+  ) -> tuple[tuple[jax.Array, GRUState], bx.Params]:
+    """Computes a single step of the GRU recurrence.
+
+    Args:
+      params: The parameters container.
+      inputs: The input at the current time step. Shape [Batch, input_size].
+      prev_state: The previous GRU state. Must not be None.
+      is_reset: Optional boolean array [Batch].
+      is_training: Unused.
+
+    Returns:
+      A nested tuple ((output, new_state), params).
+      The output of the GRU is the hidden state.
+    """
+    del is_training
+    if prev_state is None:
+      raise ValueError('The GRU __call__ method requires a valid prev_state.')
+
+    prev_state = self.maybe_reset_state(params, prev_state, inputs, is_reset)
+    prev_h = prev_state.hidden
+
+    x_and_h = jnp.concatenate([inputs, prev_h], axis=-1)
+    gates_out, params = self.gates(params, x_and_h)
+    z, r = jnp.split(gates_out, indices_or_sections=2, axis=-1)
+    z = jax.nn.sigmoid(z)
+    r = jax.nn.sigmoid(r)
+
+    r_h = r * prev_h
+    x_and_rh = jnp.concatenate([inputs, r_h], axis=-1)
+    h_tilde, params = self.candidate(params, x_and_rh)
+    h_tilde = jnp.tanh(h_tilde)
+
+    h = (1 - z) * prev_h + z * h_tilde
+
+    new_state = GRUState(hidden=h)
     return (h, new_state), params
 
 
@@ -463,12 +649,20 @@ class LayerNorm(bx.Module):
     # Scale and shift.
     if self.use_scale:
       scale, params = self.get_param(
-        params, 'scale', (features,), self.scale_init
+        params=params,
+        name='scale',
+        shape=(features,),
+        init=self.scale_init,
       )
       normalized = normalized * scale
 
     if self.use_bias:
-      bias, params = self.get_param(params, 'bias', (features,), self.bias_init)
+      bias, params = self.get_param(
+        params=params,
+        name='bias',
+        shape=(features,),
+        init=self.bias_init,
+      )
       normalized = normalized + bias
 
     return normalized, params
@@ -869,6 +1063,168 @@ class Conv(bx.Module):
     return outputs, params
 
 
+class ConvTranspose(bx.Module):
+  """General N-dimensional transposed convolution layer.
+
+  Also known as deconvolution or fractionally-strided convolution.
+  Supports 1D, 2D, and 3D convolutions based on the length of kernel_size.
+  Uses channels-last convention: (batch, *spatial_dims, channels).
+
+  Example:
+    # 2D transposed convolution for images (NHWC format)
+    conv_t = ConvTranspose(
+      graph.child('conv_t'),
+      output_channels=3,
+      kernel_size=(3, 3)
+    )
+    y, params = conv_t(params, x)  # x: [batch, height, width, channels]
+  """
+
+  def __init__(
+    self,
+    graph: bx.Graph,
+    output_channels: int,
+    kernel_size: int | Sequence[int],
+    strides: int | Sequence[int] = 1,
+    padding: PaddingLike = 'SAME',
+    kernel_dilation: int | Sequence[int] = 1,
+    feature_group_count: int = 1,
+    use_bias: bool = True,
+    kernel_init: Initializer | None = None,
+    bias_init: Initializer | None = None,
+    kernel_metadata: dict[str, Any] | None = None,
+    bias_metadata: dict[str, Any] | None = None,
+  ) -> None:
+    """Initializes the ConvTranspose module.
+
+    Args:
+      graph: The graph node for this module.
+      output_channels: Number of output channels.
+      kernel_size: Size of the convolutional kernel. An int is broadcast to
+        all spatial dimensions.
+      strides: Stride of the convolution. An int is broadcast to all spatial
+        dimensions.
+      padding: Padding mode. Either 'SAME', 'VALID', or a sequence of
+        (low, high) padding pairs for each spatial dimension.
+      kernel_dilation: Dilation of the kernel (atrous convolution).
+      feature_group_count: Number of feature groups for grouped convolution.
+        Set to input_channels for depthwise convolution.
+      use_bias: Whether to add a learnable bias.
+      kernel_init: Initializer for the kernel. Defaults to Lecun Normal.
+      bias_init: Initializer for the bias. Defaults to zeros.
+      kernel_metadata: Optional metadata for the kernel parameter.
+      bias_metadata: Optional metadata for the bias parameter.
+    """
+    super().__init__(graph)
+    self.output_channels = output_channels
+    self.kernel_size = (
+      (kernel_size,) if isinstance(kernel_size, int) else tuple(kernel_size)
+    )
+    self.strides = strides
+    self.padding = padding
+    self.kernel_dilation = kernel_dilation
+    self.feature_group_count = feature_group_count
+    self.use_bias = use_bias
+    self.kernel_init = kernel_init or jax.nn.initializers.lecun_normal()
+    self.kernel_metadata = kernel_metadata
+    self.bias_metadata = bias_metadata
+    self.bias_init = bias_init or jax.nn.initializers.zeros
+
+  def __call__(
+    self,
+    params: bx.Params,
+    inputs: jax.Array,
+    precision: jax.lax.Precision | None = None,
+  ) -> tuple[jax.Array, bx.Params]:
+    """Applies the transposed convolution.
+
+    Args:
+      params: The parameters container.
+      inputs: Input array with shape (batch, *spatial_dims, input_channels).
+      precision: Optional precision for the convolution.
+
+    Returns:
+      A tuple (output, params). Output has shape (batch, *out_spatial, output_channels).
+
+    Raises:
+      ValueError: If input rank doesn't match kernel dimensions.
+    """
+    num_spatial = len(self.kernel_size)
+    expected_rank = num_spatial + 2  # batch + spatial + channels
+
+    if inputs.ndim != expected_rank:
+      raise ValueError(
+        f'Expected input rank {expected_rank} for {num_spatial}D conv, '
+        f'got {inputs.ndim}.'
+      )
+
+    input_channels = inputs.shape[-1]
+
+    if input_channels % self.feature_group_count != 0:
+      raise ValueError(
+        f'input_channels ({input_channels}) must be divisible by '
+        f'feature_group_count ({self.feature_group_count}).'
+      )
+
+    # Kernel shape for ConvTranspose:
+    # (*kernel_size, output_channels, input_channels // groups)
+    kernel_shape = self.kernel_size + (
+      self.output_channels,
+      input_channels // self.feature_group_count,
+    )
+    kernel, params = self.get_param(
+      params,
+      'kernel',
+      kernel_shape,
+      self.kernel_init,
+      metadata=self.kernel_metadata,
+    )
+
+    # Normalize strides and dilations to tuples.
+    strides = _normalize_tuple(self.strides, num_spatial)
+    kernel_dilation = _normalize_tuple(self.kernel_dilation, num_spatial)
+
+    # Build dimension numbers for channels-last format.
+    # Input: (N, *spatial, C_in) -> lax expects (N, C_in, *spatial)
+    # Kernel: (*kernel_spatial, C_out, C_in_per_group)
+    # Output: (N, *spatial, C_out) -> lax expects (N, C_out, *spatial)
+    spatial_dims = tuple(range(1, num_spatial + 1))
+    lhs_spec = (0, num_spatial + 1) + spatial_dims  # (N, C_in, *spatial)
+    # For conv_transpose, rhs_spec maps kernel to (out_c, in_c, *spatial)
+    # We want O -> C_out (index num_spatial)
+    # We want I -> C_in (index num_spatial + 1)
+    rhs_spec = (num_spatial, num_spatial + 1) + tuple(range(num_spatial))
+    out_spec = (0, num_spatial + 1) + spatial_dims  # (N, C_out, *spatial)
+
+    dimension_numbers = jax.lax.ConvDimensionNumbers(
+      lhs_spec=lhs_spec, rhs_spec=rhs_spec, out_spec=out_spec
+    )
+
+    # Apply transposed convolution.
+    outputs = jax.lax.conv_transpose(
+      inputs,
+      kernel,
+      strides=strides,
+      padding=self.padding,
+      rhs_dilation=kernel_dilation,
+      dimension_numbers=dimension_numbers,
+      precision=precision,
+    )
+
+    # Add bias.
+    if self.use_bias:
+      bias, params = self.get_param(
+        params,
+        'bias',
+        (self.output_channels,),
+        self.bias_init,
+        metadata=self.bias_metadata,
+      )
+      outputs = outputs + bias
+
+    return outputs, params
+
+
 def max_pool(
   inputs: jax.Array,
   window_shape: int | Sequence[int],
@@ -917,6 +1273,50 @@ def max_pool(
   )
 
 
+def min_pool(
+  inputs: jax.Array,
+  window_shape: int | Sequence[int],
+  strides: int | Sequence[int] | None = None,
+  padding: str = 'VALID',
+) -> jax.Array:
+  """Applies min pooling over spatial dimensions.
+
+  Uses channels-last convention: (batch, *spatial_dims, channels).
+
+  Args:
+    inputs: Input array with shape (batch, *spatial_dims, channels).
+    window_shape: Size of the pooling window. An int is broadcast to all
+      spatial dimensions.
+    strides: Stride of the pooling. If None, uses window_shape (non-overlapping).
+    padding: Padding mode. Either 'SAME' or 'VALID'.
+
+  Returns:
+    Pooled output array.
+  """
+  num_spatial = inputs.ndim - 2
+  window = _normalize_tuple(
+    window_shape if isinstance(window_shape, int) else tuple(window_shape),
+    num_spatial,
+  )
+  strides_tuple = (
+    window if strides is None else _normalize_tuple(strides, num_spatial)
+  )
+
+  # jax.lax.reduce_window expects window and strides for all dims.
+  # Format: (batch, *spatial, channels)
+  full_window = (1,) + window + (1,)
+  full_strides = (1,) + strides_tuple + (1,)
+
+  return jax.lax.reduce_window(
+    inputs,
+    init_value=jnp.inf,
+    computation=jax.lax.min,
+    window_dimensions=full_window,
+    window_strides=full_strides,
+    padding=padding,
+  )
+
+
 def avg_pool(
   inputs: jax.Array,
   window_shape: int | Sequence[int],
@@ -926,6 +1326,9 @@ def avg_pool(
   """Applies average pooling over spatial dimensions.
 
   Uses channels-last convention: (batch, *spatial_dims, channels).
+
+  Note: When padding='SAME', the average is computed over the valid (non-padded)
+  pixels in the window, ignoring the zeros added by padding.
 
   Args:
     inputs: Input array with shape (batch, *spatial_dims, channels).
@@ -964,9 +1367,17 @@ def avg_pool(
     padding=padding,
   )
 
-  # Divide by window size for average.
-  window_size = 1
-  for w in window:
-    window_size *= w
+  # Count valid elements in each window.
+  # This allows us to divide by the correct count (ignoring padding), which is
+  # crucial for 'SAME' padding where boundary windows have fewer valid elements.
+  mask = jnp.ones_like(inputs)
+  window_counts = jax.lax.reduce_window(
+    mask,
+    init_value=0.0,
+    computation=jax.lax.add,
+    window_dimensions=full_window,
+    window_strides=full_strides,
+    padding=padding,
+  )
 
-  return pooled_sum / window_size
+  return pooled_sum / window_counts

@@ -62,6 +62,8 @@ indent-style = "space"
 skip-magic-trailing-comma = false
 # Automatically detect line endings.
 line-ending = "auto"
+docstring-code-format = true
+docstring-code-line-length = 80
 
 [tool.ruff.lint]
 # Enable Pyflakes (`F`) and a subset of the pycodestyle (`E`)  codes by default.
