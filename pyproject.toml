@@ -39,6 +39,7 @@ dev = [
     "pytest-cov",  # For coverage reports
     "ruff",        # For modern linting
     "pyrefly",     # For type checking
+    "pyink",       # For formatting
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -49,29 +50,31 @@ addopts = "-ra -q"
 testpaths = ["tests"]
 pythonpath = ["src"]
 
+[tool.pyink]
+line-length = 80
+preview = true
+pyink-indentation = 2
+pyink-use-majority-quotes = true
+
 [tool.ruff]
 line-length = 80
 indent-width = 2
 
-[tool.ruff.format]
-# Use single quotes for strings.
-quote-style = "single"
-# Indent with spaces.
-indent-style = "space"
-# Respect magic trailing commas.
-skip-magic-trailing-comma = false
-# Automatically detect line endings.
-line-ending = "auto"
-docstring-code-format = true
-docstring-code-line-length = 80
-
 [tool.ruff.lint]
-# Enable Pyflakes (`F`) and a subset of the pycodestyle (`E`)  codes by default.
-select = ["E4", "E7", "E9", "F"]
-ignore = []
+# Enable Pyflakes (`F`) and a subset of the pycodestyle (`E`) codes by default.
+select = ["E4", "E7", "E9", "F", "I", "D"]
+ignore = [
+  "D105",  # Missing docstring in magic method (__repr__, etc.)
+  "D107",  # Missing docstring in __init__
+]
 
 [tool.ruff.lint.per-file-ignores]
-"__init__.py" = ["F401"] # Ignore unused imports in __init__ files.
+"__init__.py" = ["F401"]  # Ignore unused imports in __init__ files.
+"tests/*" = ["D"]  # Tests don't need docstrings.
+"docs/*" = ["D"]  # Tutorial notebooks don't need docstrings.
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
 
 [tool.pyrefly]
 # Check both src and tests.

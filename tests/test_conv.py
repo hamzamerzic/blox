@@ -1,6 +1,6 @@
+import blox as bx
 import jax
 import jax.numpy as jnp
-import blox as bx
 import pytest
 
 
@@ -38,7 +38,10 @@ def test_conv_valid_padding():
   """Verifies VALID padding reduces spatial dimensions."""
   graph = bx.Graph('root')
   conv = bx.Conv(
-    graph.child('conv'), output_channels=16, kernel_size=(3, 3), padding='VALID'
+      graph.child('conv'),
+      output_channels=16,
+      kernel_size=(3, 3),
+      padding='VALID',
   )
 
   x = jnp.ones((2, 28, 28, 8))
@@ -54,7 +57,7 @@ def test_conv_strides():
   """Verifies strided convolution reduces spatial dimensions."""
   graph = bx.Graph('root')
   conv = bx.Conv(
-    graph.child('conv'), output_channels=16, kernel_size=(3, 3), strides=2
+      graph.child('conv'), output_channels=16, kernel_size=(3, 3), strides=2
   )
 
   x = jnp.ones((2, 28, 28, 8))
@@ -70,11 +73,11 @@ def test_conv_dilations():
   """Verifies dilated convolution (atrous convolution)."""
   graph = bx.Graph('root')
   conv = bx.Conv(
-    graph.child('conv'),
-    output_channels=16,
-    kernel_size=(3, 3),
-    kernel_dilation=2,
-    padding='VALID',
+      graph.child('conv'),
+      output_channels=16,
+      kernel_size=(3, 3),
+      kernel_dilation=2,
+      padding='VALID',
   )
 
   x = jnp.ones((2, 28, 28, 8))
@@ -91,7 +94,10 @@ def test_conv_no_bias():
   """Verifies convolution without bias."""
   graph = bx.Graph('root')
   conv = bx.Conv(
-    graph.child('conv'), output_channels=16, kernel_size=(3, 3), use_bias=False
+      graph.child('conv'),
+      output_channels=16,
+      kernel_size=(3, 3),
+      use_bias=False,
   )
 
   x = jnp.ones((2, 8, 8, 4))
@@ -129,11 +135,11 @@ def test_conv_learning():
   """
   graph = bx.Graph('root')
   conv = bx.Conv(
-    graph.child('conv'),
-    output_channels=1,
-    kernel_size=(3, 3),
-    use_bias=False,
-    padding='VALID',
+      graph.child('conv'),
+      output_channels=1,
+      kernel_size=(3, 3),
+      use_bias=False,
+      padding='VALID',
   )
 
   # Constant input of ones, large enough for VALID padding.
@@ -200,10 +206,10 @@ def test_conv_depthwise():
   graph = bx.Graph('root')
   input_channels = 8
   conv = bx.Conv(
-    graph.child('conv'),
-    output_channels=8,  # Must equal input_channels for depthwise.
-    kernel_size=(3, 3),
-    feature_group_count=8,  # One filter per input channel.
+      graph.child('conv'),
+      output_channels=8,  # Must equal input_channels for depthwise.
+      kernel_size=(3, 3),
+      feature_group_count=8,  # One filter per input channel.
   )
 
   x = jnp.ones((2, 16, 16, input_channels))
@@ -223,7 +229,10 @@ def test_conv_transpose_2d_shapes():
   """Verifies 2D ConvTranspose output shapes."""
   graph = bx.Graph('root')
   conv_t = bx.ConvTranspose(
-    graph.child('conv_t'), output_channels=3, kernel_size=(3, 3), strides=(2, 2)
+      graph.child('conv_t'),
+      output_channels=3,
+      kernel_size=(3, 3),
+      strides=(2, 2),
   )
 
   # Input: [batch, height, width, channels]
@@ -240,11 +249,11 @@ def test_conv_transpose_valid_padding():
   """Verifies ConvTranspose with VALID padding."""
   graph = bx.Graph('root')
   conv_t = bx.ConvTranspose(
-    graph.child('conv_t'),
-    output_channels=1,
-    kernel_size=(3, 3),
-    strides=(1, 1),
-    padding='VALID',
+      graph.child('conv_t'),
+      output_channels=1,
+      kernel_size=(3, 3),
+      strides=(1, 1),
+      padding='VALID',
   )
 
   # Input: [batch, height, width, channels]
@@ -262,7 +271,7 @@ def test_conv_transpose_kernel_shape():
   """Verifies ConvTranspose kernel shape."""
   graph = bx.Graph('root')
   conv_t = bx.ConvTranspose(
-    graph.child('conv_t'), output_channels=3, kernel_size=(4, 4)
+      graph.child('conv_t'), output_channels=3, kernel_size=(4, 4)
   )
 
   x = jnp.ones((1, 8, 8, 16))
@@ -280,7 +289,7 @@ def test_conv_transpose_1d_shapes():
   """Verifies 1D ConvTranspose output shapes."""
   graph = bx.Graph('root')
   conv_t = bx.ConvTranspose(
-    graph.child('conv_t'), output_channels=8, kernel_size=3, strides=2
+      graph.child('conv_t'), output_channels=8, kernel_size=3, strides=2
   )
 
   # [batch, length, channels]
@@ -297,10 +306,10 @@ def test_conv_transpose_3d_shapes():
   """Verifies 3D ConvTranspose output shapes."""
   graph = bx.Graph('root')
   conv_t = bx.ConvTranspose(
-    graph.child('conv_t'),
-    output_channels=4,
-    kernel_size=(2, 2, 2),
-    strides=(2, 2, 2),
+      graph.child('conv_t'),
+      output_channels=4,
+      kernel_size=(2, 2, 2),
+      strides=(2, 2, 2),
   )
 
   # [batch, depth, height, width, channels]

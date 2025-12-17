@@ -1,12 +1,11 @@
-import jax
-import jax.numpy as jnp
 import blox as bx
 import chex
+import jax
+import jax.numpy as jnp
 
 
 def test_rng_updates_during_training():
   """Verifies that non-trainable state (RNG) is correctly updated after grad."""
-
   # Setup the model graph and layer.
   graph = bx.Graph('root')
   model = bx.Linear(graph.child('linear'), output_size=1)
@@ -68,6 +67,7 @@ def test_rng_updates_during_training():
 
   # Define a mock layer that consumes RNG during the forward pass.
   class MockDropout(bx.Module):
+
     def __call__(self, p, x):
       # Manually consume a key to simulate dropout.
       _, new_p = p.next_key()
@@ -161,7 +161,7 @@ def test_checkpoint_produces_correct_gradients():
     return jnp.mean((pred - targets) ** 2)
 
   grads_checkpointed = jax.grad(loss_fn_checkpointed)(
-    trainable, non_trainable, x, y
+      trainable, non_trainable, x, y
   )
 
   # Gradients should match exactly.
@@ -223,7 +223,7 @@ def test_checkpoint_with_dropout():
     return jnp.mean((pred - targets) ** 2), new_nt
 
   grads_normal, nt_normal = jax.grad(loss_fn, has_aux=True)(
-    trainable, non_trainable, x, y
+      trainable, non_trainable, x, y
   )
 
   # Compute gradients with checkpoint.
@@ -234,7 +234,7 @@ def test_checkpoint_with_dropout():
     return jnp.mean((pred - targets) ** 2), new_nt
 
   grads_checkpointed, nt_checkpointed = jax.grad(
-    loss_fn_checkpointed, has_aux=True
+      loss_fn_checkpointed, has_aux=True
   )(trainable, non_trainable, x, y)
 
   # Gradients should match.
@@ -243,6 +243,6 @@ def test_checkpoint_with_dropout():
   # RNG counter should be updated the same way.
   counter_path = ('root', 'rng', 'counter')
   assert (
-    nt_normal._data[counter_path].value
-    == nt_checkpointed._data[counter_path].value
+      nt_normal._data[counter_path].value
+      == nt_checkpointed._data[counter_path].value
   )

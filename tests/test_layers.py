@@ -1,6 +1,6 @@
+import blox as bx
 import jax
 import jax.numpy as jnp
-import blox as bx
 
 
 def test_linear_shapes():
@@ -100,12 +100,12 @@ def test_sequential_chaining():
   """Verifies Sequential correctly chains layers and functions."""
   graph = bx.Graph('root')
   model = bx.Sequential(
-    graph.child('seq'),
-    [
-      bx.Linear(graph.child('l1'), output_size=10),
-      jax.nn.relu,
-      bx.Linear(graph.child('l2'), output_size=5),
-    ],
+      graph.child('seq'),
+      [
+          bx.Linear(graph.child('l1'), output_size=10),
+          jax.nn.relu,
+          bx.Linear(graph.child('l2'), output_size=5),
+      ],
   )
 
   x = jnp.ones((2, 20))  # Batch=2, Features=20
@@ -132,7 +132,7 @@ def test_sequential_nested():
   """Verifies nested Sequential modules."""
   graph = bx.Graph('root')
   inner = bx.Sequential(
-    graph.child('inner'), [bx.Linear(graph.child('l1'), output_size=5)]
+      graph.child('inner'), [bx.Linear(graph.child('l1'), output_size=5)]
   )
   outer = bx.Sequential(graph.child('outer'), [inner, jax.nn.relu])
 

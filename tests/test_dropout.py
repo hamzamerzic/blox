@@ -1,5 +1,5 @@
-import jax.numpy as jnp
 import blox as bx
+import jax.numpy as jnp
 import pytest
 
 
@@ -77,7 +77,7 @@ def test_dropout_scaling():
 
   expected_scale = 1.0 / (1.0 - rate)
   assert jnp.allclose(
-    non_zero_vals, expected_scale, atol=1e-5
+      non_zero_vals, expected_scale, atol=1e-5
   ), 'Non-zero values should be scaled.'
 
 
@@ -95,7 +95,7 @@ def test_dropout_zero_rate():
   # Should not consume RNG (counter should not even be initialized).
   counter_path = ('root', 'rng', 'counter')
   assert (
-    counter_path not in params_out._data
+      counter_path not in params_out._data
   ), 'Dropout with rate=0 should not consume RNG.'
 
 

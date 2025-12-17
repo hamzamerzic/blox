@@ -1,5 +1,5 @@
-import jax.numpy as jnp
 import blox as bx
+import jax.numpy as jnp
 import pytest
 
 
@@ -128,7 +128,7 @@ def test_lstm_call_raises_on_none_state():
   params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=0))
 
   with pytest.raises(
-    ValueError, match='The LSTM __call__ method requires a valid prev_state.'
+      ValueError, match='The LSTM __call__ method requires a valid prev_state.'
   ):
     lstm(params, inputs, None)
 

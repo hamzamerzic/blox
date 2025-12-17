@@ -1,8 +1,8 @@
 """Tests for the Embed layer."""
 
+import blox as bx
 import jax
 import jax.numpy as jnp
-import blox as bx
 
 
 def test_embed_shapes():
@@ -16,8 +16,8 @@ def test_embed_shapes():
   embeddings, params = embed(params, indices)
 
   assert embeddings.shape == (
-    4,
-    32,
+      4,
+      32,
   ), 'Output shape should be (batch, embedding_size).'
 
 
@@ -33,9 +33,9 @@ def test_embed_batched():
   embeddings, params = embed(params, indices)
 
   assert embeddings.shape == (
-    2,
-    3,
-    16,
+      2,
+      3,
+      16,
   ), 'Output shape should be (batch, seq, embedding_size).'
 
 
@@ -78,7 +78,7 @@ def test_embed_weight_tying():
 
   expected = test_input @ embedding_matrix.T
   assert jnp.allclose(
-    logits, expected
+      logits, expected
   ), 'attend should compute input @ embedding.T'
 
 
@@ -121,7 +121,7 @@ def test_embed_learning():
 
   # Loss should decrease significantly.
   assert (
-    final_loss < initial_loss * 0.1
+      final_loss < initial_loss * 0.1
   ), 'Embedding should learn (loss should decrease).'
 
 

@@ -1,5 +1,5 @@
-import jax.numpy as jnp
 import blox.blocks as blocks
+import jax.numpy as jnp
 
 
 def test_max_pool_shapes():
@@ -55,7 +55,7 @@ def test_avg_pool_same_padding_correctness():
   # If we strictly average valid pixels, the result should be all 1s.
   # The current implementation (dividing by window size) produces 0.25 at corners.
   assert jnp.allclose(
-    y_blox, 1.0
+      y_blox, 1.0
   ), f'Expected all 1s, but got min value: {jnp.min(y_blox)}'
 
 

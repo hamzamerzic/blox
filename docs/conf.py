@@ -8,9 +8,9 @@ copyright = '2025, Hamza Merzić'
 author = 'Hamza Merzić'
 
 extensions = [
-  'sphinx.ext.autodoc',
-  'sphinx.ext.napoleon',
-  'nbsphinx',
+    'sphinx.ext.autodoc',
+    'sphinx.ext.napoleon',
+    'nbsphinx',
 ]
 
 templates_path = ['_templates']

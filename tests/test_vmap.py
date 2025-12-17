@@ -1,9 +1,8 @@
 """Tests for vmap compatibility with fold_in_axes/fold_out_axes."""
 
+import blox as bx
 import jax
 import jax.numpy as jnp
-import blox as bx
-
 
 # =============================================================================
 # Basic fold_in_axes behavior
@@ -122,7 +121,7 @@ def test_fold_out_axes_multiple():
     return True
 
   nested = jax.vmap(
-    jax.vmap(check_multi_unfold, axis_name='inner'), axis_name='outer'
+      jax.vmap(check_multi_unfold, axis_name='inner'), axis_name='outer'
   )
   results = nested(jnp.ones((2, 3, 1)))
   assert jnp.all(results)
@@ -147,7 +146,7 @@ def test_fold_out_axes_partial():
     return key_both, key_outer, axes_correct
 
   nested = jax.vmap(
-    jax.vmap(check_partial, axis_name='inner'), axis_name='outer'
+      jax.vmap(check_partial, axis_name='inner'), axis_name='outer'
   )
   keys_both, keys_outer, axes_correct = nested(jnp.ones((2, 3, 1)))
 
@@ -158,7 +157,7 @@ def test_fold_out_axes_partial():
   for outer_idx in range(2):
     for inner_idx in range(1, 3):
       assert jnp.array_equal(
-        keys_outer[outer_idx, 0], keys_outer[outer_idx, inner_idx]
+          keys_outer[outer_idx, 0], keys_outer[outer_idx, inner_idx]
       )
 
 
@@ -222,7 +221,7 @@ def test_folded_axes_preserved_after_jit():
     return original_key, reconstructed_key
 
   orig, recon = jax.vmap(check_reconstruction, axis_name='batch')(
-    jnp.ones((3, 1))
+      jnp.ones((3, 1))
   )
   # Keys should be different because counter incremented.
   # But both should be valid device-unique keys.
@@ -384,9 +383,9 @@ def test_nested_vmap_mlp_apply():
 
   # Nested vmap: params replicated (in_axes=None), data batched.
   apply_nested = jax.vmap(
-    jax.vmap(apply_model, in_axes=(None, 0), axis_name='inner'),
-    in_axes=(None, 0),
-    axis_name='outer',
+      jax.vmap(apply_model, in_axes=(None, 0), axis_name='inner'),
+      in_axes=(None, 0),
+      axis_name='outer',
   )
 
   # Shape: [outer=2, inner=3, batch=1, features=16]

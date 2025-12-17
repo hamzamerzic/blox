@@ -1,17 +1,29 @@
 """Core interfaces and abstractions for the blox library.
 
-This module defines the fundamental building blocks of the library, including:
-- Graph: Structural definition of the model hierarchy.
-- Params: Immutable, functional state container.
-- Module: Base class for neural network layers.
-- SequenceBase/RecurrenceBase: Interfaces for sequence processing.
+This module defines the fundamental building blocks:
 
-It is designed to be strictly typed and utilizes chex for runtime shape checking.
+1.  **Graph:** Represents the static, hierarchical structure of the model. It
+    handles naming and pathing (e.g. `net/layer1/weights`) but stores no state.
+2.  **Params:** A functional, immutable container for all model state (weights,
+    RNG keys, batch norms stats). It is passed through every layer.
+3.  **Module:** The base class for layers. It connects a `Graph` node to
+    parameter creation logic (`get_param` / `set_param`).
+4.  **Sequence Processing:**
+    *   `SequenceBase`: Abstract interface for layers that handle sequences
+        (RNN, Transformer).
+    *   `RecurrenceBase`: Abstract interface for layers that process sequences
+        step-by-step (RNN, LSTM, GRU).
+
+These interfaces enforce functional purity and explicit state management,
+making the library robust for JAX transformations.
 """
 
 from __future__ import annotations
+
 import abc
+import functools
 import inspect
+from collections.abc import ItemsView, KeysView, ValuesView
 from typing import Any, Callable, Generic, TypeVar, cast
 
 import chex
@@ -92,7 +104,7 @@ class Graph:
     """
     if name in self._children:
       raise ValueError(
-        f"Graph node '{self.path}' already has a child named '{name}'."
+          f"Graph node '{self.path}' already has a child named '{name}'."
       )
     child_node = Graph(name)
     child_node._set_parent(self)
@@ -142,10 +154,10 @@ class Param:
   """
 
   def __init__(
-    self,
-    value: Any,
-    trainable: bool = True,
-    metadata: dict[str, Any] | None = None,
+      self,
+      value: Any,
+      trainable: bool = True,
+      metadata: dict[str, Any] | None = None,
   ) -> None:
     self.value = value
     self.trainable = trainable
@@ -166,24 +178,24 @@ class Param:
       A new Param instance.
     """
     current = {
-      'value': self.value,
-      'trainable': self.trainable,
-      'metadata': self.metadata,
+        'value': self.value,
+        'trainable': self.trainable,
+        'metadata': self.metadata,
     }
     current.update(updates)
     return Param(**current)
 
   def tree_flatten(
-    self,
+      self,
   ) -> tuple[tuple[Any], tuple[bool, dict[str, Any]]]:
     """Flattens the param for JAX pytree registration."""
     return (self.value,), (self.trainable, self.metadata)
 
   @classmethod
   def tree_unflatten(
-    cls,
-    aux: tuple[bool, dict[str, Any]],
-    children: tuple[Any],
+      cls,
+      aux: tuple[bool, dict[str, Any]],
+      children: tuple[Any],
   ) -> Param:
     """Unflattens the param for JAX pytree registration."""
     return cls(children[0], trainable=aux[0], metadata=aux[1])
@@ -197,73 +209,221 @@ class Param:
 
 
 jax.tree_util.register_pytree_node(
-  Param, Param.tree_flatten, Param.tree_unflatten
+    Param, Param.tree_flatten, Param.tree_unflatten
 )
 
 
 class Params:
   """Immutable container for model parameters and state.
 
-  This class manages the functional state of the model. It handles:
-  1. Parameter storage and retrieval via tuple paths.
-  2. Deterministic RNG key generation via an Rng module.
-  3. Partitioning state for JIT compilation (trainable vs non-trainable).
+  Params holds all model state: trainable weights, non-trainable values (like
+  batch norm statistics), and RNG state. It enforces functional purity by
+  returning new instances on every modification.
 
-  For sharded/vmapped code, use fold_in_axes() at the start of the function
-  to get device-unique RNG keys while keeping the master key replicated.
+  Key features:
+  - **Functional updates**: All methods return new Params instances.
+  - **Tuple paths**: Parameters are keyed by tuples like ('net', 'linear', 'w').
+  - **Trainable split**: Use `split()` to separate trainable from non-trainable.
+  - **RNG management**: Use `next_key()` to get deterministic random keys.
+  - **Device sharding**: Use `fold_in_axes()` for device-unique RNG in shard_map.
+
+  Example:
+    graph = bx.Graph('net')
+    rng = bx.Rng(graph.child('rng'), seed=42)
+    params = bx.Params(rng=rng)
+
+    # Forward pass creates parameters
+    _, params = model(params, x)
+    params = params.finalize()
+
+    # Training loop
+    trainable, non_trainable = params.split()
+    grads = jax.grad(loss_fn)(trainable, non_trainable, x)
+    trainable = jax.tree.map(lambda w, g: w - lr * g, trainable, grads)
+    params = trainable.merge(non_trainable)
   """
 
+  # ============================================================================
+  # Initialization
+  # ============================================================================
+
   def __init__(self, *, rng: 'Rng') -> None:
-    """Initializes the container with an Rng module.
+    """Creates a new parameter container.
 
     Args:
-      rng: An Rng module for random number generation.
+      rng: An Rng module for random number generation. Required for parameter
+        initialization that needs random keys.
     """
     self._data: dict[Path, Param] = {}
     self._initialized: bool = False
-    # Tracks which axes have been folded in (ordered tuple for determinism).
     self._folded_axes: tuple[str, ...] = ()
-    # Reference to the Rng module for key generation.
     self._rng: 'Rng' = rng
+
+  # ============================================================================
+  # Properties
+  # ============================================================================
 
   @property
   def initialized(self) -> bool:
-    """Returns True if the parameter initialization has been finalized."""
+    """True if finalize() has been called, preventing new parameter creation."""
     return self._initialized
 
   @property
   def folded_axes(self) -> tuple[str, ...]:
-    """Returns the currently folded axes for device-unique RNG."""
+    """Axes currently folded in for device-unique RNG keys."""
     return self._folded_axes
 
-  def __repr__(self) -> str:
-    n_vars = len(self._data)
-    status = 'initialized' if self._initialized else 'uninitialized'
-    return f'Params({n_vars} variables, {status})'
+  # ============================================================================
+  # Core API
+  # ============================================================================
+
+  def next_key(self) -> tuple[jax.Array, 'Params']:
+    """Generates a new random key.
+
+    Delegates to the internal Rng module, which handles counter-based key
+    generation and respects folded axes for device-unique randomness.
+
+    Returns:
+      A tuple of (random_key, updated_params).
+    """
+    return self._rng(self)
+
+  def finalize(self) -> 'Params':
+    """Marks initialization complete, preventing new parameter creation.
+
+    After finalization, attempting to create new parameters via get_param
+    will raise KeyError. This catches bugs where parameter names change
+    between training runs.
+
+    Returns:
+      A new finalized Params instance.
+    """
+    p = self._clone()
+    p._initialized = True
+    return p
+
+  def split(
+      self, predicate: Callable[[Path, Param], bool] | None = None
+  ) -> tuple['Params', 'Params']:
+    """Partitions parameters into two containers.
+
+    Without arguments, splits into trainable and non-trainable parameters.
+    This is the standard pattern for computing gradients:
+
+      trainable, non_trainable = params.split()
+      grads = jax.grad(loss_fn)(trainable, non_trainable, x)
+
+    Args:
+      predicate: Optional function (path, param) -> bool. Parameters where
+        the predicate returns True go in the first container. Defaults to
+        splitting by trainable flag.
+
+    Returns:
+      Tuple of (matching_params, non_matching_params).
+    """
+
+    def default_predicate(_path: Path, p: Param) -> bool:
+      return p.trainable
+
+    if predicate is None:
+      predicate = default_predicate
+
+    match_data: dict[Path, Param] = {}
+    other_data: dict[Path, Param] = {}
+    for path, param in self._data.items():
+      if predicate(path, param):
+        match_data[path] = param
+      else:
+        other_data[path] = param
+
+    match, other = self._clone(), self._clone()
+    match._data, other._data = match_data, other_data
+    return match, other
+
+  def merge(self, other: 'Params') -> 'Params':
+    """Combines this container with another.
+
+    Parameters from `other` override those in `self` if paths conflict.
+    Both containers must have the same initialized and folded_axes state.
+
+    Args:
+      other: Another Params container to merge in.
+
+    Returns:
+      A new merged Params container.
+
+    Raises:
+      ValueError: If initialized or folded_axes state doesn't match.
+    """
+    if self.initialized != other.initialized:
+      raise ValueError(
+          f'Initialized mismatch: {self.initialized} vs {other.initialized}.'
+      )
+    if self.folded_axes != other.folded_axes:
+      raise ValueError(
+          f'Folded axes mismatch: {self.folded_axes} vs {other.folded_axes}.'
+      )
+
+    p = self._clone()
+    p._data.update(other._data)
+    return p
+
+  # ============================================================================
+  # Dict-like Access
+  # ============================================================================
+
+  def __getitem__(self, key: Path) -> Param:
+    """Gets a parameter by its full path.
+
+    Args:
+      key: Tuple path like ('net', 'linear', 'kernel').
+
+    Returns:
+      The Param wrapper at that path.
+
+    Raises:
+      KeyError: If the path doesn't exist.
+    """
+    if key not in self._data:
+      raise KeyError(f"Path '{key}' not found.")
+    return self._data[key]
+
+  def keys(self) -> KeysView[Path]:
+    """Returns all parameter paths."""
+    return self._data.keys()
+
+  def values(self) -> ValuesView[Param]:
+    """Returns all Param wrappers."""
+    return self._data.values()
+
+  def items(self) -> ItemsView[Path, Param]:
+    """Returns (path, Param) pairs."""
+    return self._data.items()
+
+  # ============================================================================
+  # Sharding / Device Parallelism
+  # ============================================================================
 
   def fold_in_axes(self, *axis_names: str) -> 'Params':
     """Records axes to fold in for device-unique RNG.
 
-    Call this at the start of a shard_map or vmap function to get different
-    RNG keys on each device/batch element. The Rng module reads folded_axes
-    when generating keys.
+    Call at the start of shard_map/vmap to get different random keys on each
+    device/batch element. The actual folding happens in Rng.next_key().
 
-    Folding is idempotent per axis - folding the same axis twice has no effect.
-    Axes are folded in order, which affects the resulting key.
-
-    Use fold_out_axes() to explicitly unfold axes before returning from shard_map.
+    This is a no-op outside of shard_map/vmap, allowing the same code to work
+    in both contexts. Folding is idempotent per axis.
 
     Args:
       *axis_names: Axis names to fold in (e.g., 'model', 'batch').
 
     Returns:
-      Self if all axes already folded, otherwise a new Params with axes recorded.
+      A new Params with axes recorded (or self if no-op).
 
     Raises:
       ValueError: If an axis doesn't exist in the current context.
 
     Example:
-      @jax.shard_map(mesh=mesh, in_specs=P(), out_specs=param_specs)
+      @jax.shard_map(mesh=mesh, in_specs=P(), out_specs=specs)
       def init_sharded(x):
         params = bx.Params(rng=rng).fold_in_axes('model')
         _, params = model(params, x)
@@ -272,53 +432,45 @@ class Params:
     if not axis_names:
       return self
 
-    # Check if axes exist using JAX internal API.
+    # No-op outside shard_map/vmap.
     current_axes = jax.core.unsafe_get_axis_names_DO_NOT_USE()
-
-    # If no axes are active (e.g., outside shard_map), silently skip.
-    # This allows the same code to work both inside and outside shard_map.
     if not current_axes:
       return self
 
-    # Validate all axes exist.
-    for axis_name in axis_names:
-      if axis_name not in current_axes:
+    # Validate axes exist.
+    for name in axis_names:
+      if name not in current_axes:
         raise ValueError(
-          f"Axis '{axis_name}' not found. Available axes: {current_axes}. "
-          f'Make sure fold_in_axes is called inside shard_map/vmap with this axis.'
+            f"Axis '{name}' not found. Available: {current_axes}. "
+            'Ensure fold_in_axes is called inside shard_map/vmap.'
         )
 
-    # Check if all axes are already folded (idempotent).
-    new_axes = [name for name in axis_names if name not in self._folded_axes]
+    # Idempotent: skip already-folded axes.
+    new_axes = [n for n in axis_names if n not in self._folded_axes]
     if not new_axes:
       return self
 
-    # Record folded axes (actual folding happens in Rng).
-    new_p = self._clone()
-    for axis_name in new_axes:
-      new_p._folded_axes = new_p._folded_axes + (axis_name,)
-    return new_p
+    p = self._clone()
+    p._folded_axes = self._folded_axes + tuple(new_axes)
+    return p
 
   def fold_out_axes(self, *axis_names: str) -> 'Params':
-    """Removes axes from the folded axes list.
+    """Removes axes from the folded list before returning from shard_map.
 
-    Call this before returning from shard_map/vmap to ensure pytree metadata
+    Call before returning from shard_map/vmap to ensure pytree metadata
     matches between eval_shape (outside) and actual execution (inside).
 
-    The axes to unfold must be at the end of the folded axes stack. The order
-    of axes in the call doesn't matter, but they must all be at the tail.
-
     Args:
-      *axis_names: Axis names to unfold. Must be at the end of _folded_axes.
+      *axis_names: Axes to unfold. Must be at the end of the folded stack.
 
     Returns:
-      A new Params with the axes removed from folded_axes.
+      A new Params with axes removed (or self if no-op).
 
     Raises:
-      ValueError: If axes are not at the end of the folded axes stack.
+      ValueError: If axes aren't at the end of the folded stack.
 
     Example:
-      @jax.shard_map(mesh=mesh, in_specs=P(), out_specs=param_specs)
+      @jax.shard_map(mesh=mesh, in_specs=specs, out_specs=specs)
       def apply_sharded(params, x):
         params = params.fold_in_axes('model')
         out, params = model(params, x)
@@ -327,214 +479,114 @@ class Params:
     if not axis_names:
       return self
 
-    # If no axes are active (outside shard_map), silently skip.
+    # No-op outside shard_map/vmap.
     current_axes = jax.core.unsafe_get_axis_names_DO_NOT_USE()
     if not current_axes:
       return self
 
-    # Validate axes are in folded_axes.
+    # Validate axes are folded.
     axes_set = set(axis_names)
-    for axis_name in axis_names:
-      if axis_name not in self._folded_axes:
+    for name in axis_names:
+      if name not in self._folded_axes:
         raise ValueError(
-          f"Axis '{axis_name}' is not folded. Current folded axes: "
-          f'{self._folded_axes}'
+            f"Axis '{name}' not folded. Current: {self._folded_axes}"
         )
 
-    # Validate axes form the tail of the stack.
-    n_to_remove = len(axes_set)
-    tail_axes = set(self._folded_axes[-n_to_remove:])
-    if axes_set != tail_axes:
+    # Axes must be at the tail of the stack.
+    n = len(axes_set)
+    if axes_set != set(self._folded_axes[-n:]):
       raise ValueError(
-        f'Axes {axis_names} must be at the end of folded axes stack. '
-        f'Current stack: {self._folded_axes}. '
-        f'Tail axes: {tail_axes}'
+          f'Axes {axis_names} must be at end of stack {self._folded_axes}.'
       )
 
-    # Remove axes from the end.
-    new_p = self._clone()
-    new_p._folded_axes = self._folded_axes[:-n_to_remove]
-    return new_p
+    p = self._clone()
+    p._folded_axes = self._folded_axes[:-n]
+    return p
 
-  def next_key(self) -> tuple[jax.Array, Params]:
-    """Generates a new key using the internal Rng module.
+  # ============================================================================
+  # Internal Methods
+  # ============================================================================
 
-    Delegates to the Rng module which handles key generation, counter
-    management, and folded axes for device-unique randomness.
-
-    Returns:
-      A tuple containing (new_key, new_params_container).
-
-    Raises:
-      ValueError: If no Rng was configured.
-    """
-    return self._rng(self)
-
-  def get(
-    self,
-    graph: Graph,
-    name: str,
-    shape: Shape,
-    init: Initializer,
-    dtype: jnp.dtype = jnp.float32,
-    trainable: bool = True,
-    metadata: dict[str, Any] | None = None,
-  ) -> tuple[jax.Array, Params]:
-    """Retrieves an existing parameter or creates a new one.
-
-    Args:
-      graph: The graph node requesting the parameter.
-      name: The local name of the parameter.
-      shape: The shape of the parameter tensor.
-      init: Function to initialize the parameter.
-      dtype: The data type.
-      trainable: Whether the parameter is trainable.
-      metadata: Optional metadata dictionary. Common keys include:
-        - 'sharding': tuple of mesh axis names (e.g., (None, 'model'))
-
-    Returns:
-      A tuple containing (parameter_value, new_params_container).
-
-    Raises:
-      KeyError: If parameters are finalized and the key is missing.
-    """
+  def _get(
+      self,
+      graph: Graph,
+      name: str,
+      shape: Shape,
+      init: Initializer,
+      dtype: jnp.dtype = jnp.float32,
+      trainable: bool = True,
+      metadata: dict[str, Any] | None = None,
+  ) -> tuple[jax.Array, 'Params']:
+    """Retrieves or creates a parameter. Use Module.get_param instead."""
     full_path = graph.path + (name,)
 
-    # Check for existing parameter.
+    # Return existing parameter.
     if full_path in self._data:
       return self._data[full_path].value, self
 
-    # Check against adding new params if finalized.
+    # Reject new params after finalization.
     if self._initialized:
-      path_str = '/'.join(full_path)
-      raise KeyError(f"Parameter '{path_str}' is missing.")
+      raise KeyError(f"Parameter '{full_path}' missing (params finalized).")
 
-    # Try initializer with key=None first (for constant initializers).
-    # If that fails, use a fresh key from RNG.
+    # Try constant initializer (key=None), fall back to RNG.
     try:
       val = init(None, shape, dtype)  # type: ignore
       new_p = self._clone()
     except Exception:
-      # Initializer requires a key, so get one from RNG.
       key, new_p = self.next_key()
       val = init(key, shape, dtype)
 
-    var = Param(val, trainable=trainable, metadata=metadata)
-
-    # Store the variable.
-    new_p._data[full_path] = var
+    new_p._data[full_path] = Param(val, trainable=trainable, metadata=metadata)
     return val, new_p
 
-  def set(self, path: Path, value: Any) -> Params:
-    """Updates the value of an existing parameter.
-
-    Args:
-      path: The full path tuple of the parameter, e.g. ('net', 'linear', 'w').
-      value: The new value (must match the dtype of the existing variable).
-
-    Returns:
-      A new Params container with the updated value.
-
-    Raises:
-      KeyError: If the path does not exist.
-    """
+  def _set(self, path: Path, value: Any) -> 'Params':
+    """Updates a parameter value. Use Module.set_param instead."""
     if path not in self._data:
-      path_str = '/'.join(path)
-      raise KeyError(f"Path '{path_str}' not found.")
+      raise KeyError(f"Path '{path}' not found.")
 
-    current_var = self._data[path]
-    new_var = current_var.replace(value=value)
-
-    new_p = self._clone()
-    new_p._data[path] = new_var
-    return new_p
-
-  def split(
-    self, predicate: Callable[[Path, Param], bool] | None = None
-  ) -> tuple[Params, Params]:
-    """Splits params into two containers based on a predicate.
-
-    When called without arguments, splits by trainable flag
-    (trainable vs non-trainable) otherwise splits by the provided predicate.
-
-    Args:
-      predicate: Optional function taking (param_path, param) and returning
-        bool. param_path is a tuple like ('net', 'encoder', 'w'), where the last
-        entry is the param name. If None, defaults to splitting into trainable
-        and non-trainable params.
-
-    Returns:
-      A tuple (matching_params, non_matching_params).
-    """
-
-    def _default_predicate(_path: Path, p: Param) -> bool:
-      return p.trainable
-
-    if predicate is None:
-      predicate = _default_predicate
-
-    t_data: dict[Path, Param] = {}
-    f_data: dict[Path, Param] = {}
-    for full_path, param in self._data.items():
-      if predicate(full_path, param):
-        t_data[full_path] = param
-      else:
-        f_data[full_path] = param
-
-    t, f = self._clone(), self._clone()
-    t._data, f._data = t_data, f_data
-    return t, f
-
-  def merge(self, other: Params) -> Params:
-    """Combines this container with another.
-
-    Keys in 'other' override keys in 'self'.
-
-    Args:
-      other: The params container to merge in.
-
-    Returns:
-      A new merged Params container.
-    """
     p = self._clone()
-    p._data.update(other._data)
+    p._data[path] = self._data[path].replace(value=value)
     return p
 
-  def finalize(self) -> Params:
-    """Marks initialization as complete, freezing the set of keys.
-
-    Returns:
-      A new Params container marked as initialized.
-    """
-    p = self._clone()
-    p._initialized = True
-    return p
-
-  def _clone(self) -> Params:
-    """Internal helper to clone the container."""
-    # We must cast the raw object to Params so the type checker knows
-    # it has the _data and _initialized attributes.
+  def _clone(self) -> 'Params':
+    """Creates a shallow copy of this container."""
     p = cast(Params, object.__new__(Params))
     p._data = self._data.copy()
     p._initialized = self._initialized
     p._folded_axes = self._folded_axes
     p._rng = self._rng
-
     return p
 
+  # ============================================================================
+  # Special Methods
+  # ============================================================================
+
+  def __repr__(self) -> str:
+    abstract_data = jax.eval_shape(lambda x: x, self._data)
+    status = 'initialized' if self._initialized else 'uninitialized'
+    lines = [f'Params[{status}]({{']
+    for k, v in abstract_data.items():
+      lines.append(f'  {k}: {v},')
+    lines.append('})')
+    return '\n'.join(lines)
+
+  # ============================================================================
+  # JAX Pytree Registration
+  # ============================================================================
+
   def tree_flatten(
-    self,
+      self,
   ) -> tuple[tuple[dict[Path, Param]], tuple[bool, tuple[str, ...], 'Rng']]:
-    """Flattens the container for JAX pytree registration."""
+    """Flattens for JAX pytree operations."""
     return (self._data,), (self._initialized, self._folded_axes, self._rng)
 
   @classmethod
   def tree_unflatten(
-    cls,
-    aux: tuple[bool, tuple[str, ...], 'Rng'],
-    children: tuple[dict[Path, Param]],
-  ) -> Params:
-    """Unflattens the container for JAX pytree registration."""
+      cls,
+      aux: tuple[bool, tuple[str, ...], 'Rng'],
+      children: tuple[dict[Path, Param]],
+  ) -> 'Params':
+    """Unflattens from JAX pytree operations."""
     p = cast(Params, object.__new__(cls))
     p._data = children[0]
     p._initialized = aux[0]
@@ -544,7 +596,7 @@ class Params:
 
 
 jax.tree_util.register_pytree_node(
-  Params, Params.tree_flatten, Params.tree_unflatten
+    Params, Params.tree_flatten, Params.tree_unflatten
 )
 
 
@@ -553,139 +605,200 @@ jax.tree_util.register_pytree_node(
 # ==============================================================================
 
 
-class Module(abc.ABC):
-  """Base class for Neural Network layers.
+class Module:
+  """Base class for neural network layers.
 
-  All layers should inherit from this class. It provides the connection to the
-  Graph and helper methods for parameter creation.
+  Module provides the foundation for building neural network layers in blox.
+  It connects layers to the Graph hierarchy for parameter namespacing and
+  provides helper methods for parameter creation.
 
-  Note: This class does NOT enforce a specific `__call__` signature, as
-  different modules require different inputs (e.g., Linear vs Attention).
-  Subclasses should define `__call__` accepting `params` as the first argument.
+  Key features:
+  - **Graph binding**: Each module owns a Graph node that namespaces its params.
+  - **Constructor capture**: Arguments are automatically saved to graph metadata
+    for visualization and serialization.
+  - **Parameter helpers**: `get_param` and `set_param` simplify parameter access.
+
+  All subclasses must:
+  1. Accept `graph` as the first constructor argument
+  2. Call `super().__init__(graph)` in their `__init__`
+  3. Implement `__call__(self, params, ...) -> (output, params)`
+
+  Example:
+    class Linear(bx.Module):
+      def __init__(self, graph, output_size):
+        super().__init__(graph)
+        self.output_size = output_size
+
+      def __call__(self, params, x):
+        kernel, params = self.get_param(
+            params, 'kernel', (x.shape[-1], self.output_size),
+            jax.nn.initializers.lecun_normal()
+        )
+        return x @ kernel, params
+
+    graph = bx.Graph('net')
+    linear = Linear(graph.child('linear'), output_size=32)
   """
 
   def __init__(self, graph: Graph) -> None:
-    """Initializes the Module with a graph node.
+    """Binds this module to a graph node.
 
     Args:
-      graph: The graph node representing this module's scope.
+      graph: A Graph node for namespacing this module's parameters.
+        Must not be a root node - use `graph.child('name')` to create one.
+
+    Raises:
+      ValueError: If graph is a root node or already owned by another module.
     """
-    # Prevent binding directly to the root graph.
     if graph._is_root:
       raise ValueError(
-        f"Cannot bind module '{self.__class__.__name__}' directly to the "
-        f"root graph node '{graph.name}'. Please create a child scope "
-        f"using `graph.child('name')`."
+          f"Cannot bind '{self.__class__.__name__}' to root graph node "
+          f"'{graph.name}'. Use graph.child('name') to create a child node."
       )
-
     if '__type__' in graph.metadata:
-      owner = graph.metadata['__type__']
       raise ValueError(
-        f"Graph node '{graph.name}' is already owned by '{owner}'. "
-        "Did you forget to call graph.child('name')?"
+          f"Graph node '{graph.name}' already owned by '{graph.metadata['__type__']}'. "
+          f"Did you forget to call graph.child('name')?"
       )
-
     self.graph = graph
-    self._capture_constructor_args()
 
-  def _capture_constructor_args(self) -> None:
-    """Captures the subclass constructor arguments into graph metadata."""
-    # Register the class name.
-    self.graph.metadata['__type__'] = self.__class__.__name__
+  def __init_subclass__(cls, **kwargs: Any) -> None:
+    """Wraps subclass __init__ to capture constructor arguments.
 
-    # Start at the frame calling this method (Module.__init__)
-    current_frame = inspect.currentframe()
-    if current_frame is None:
+    This metaclass-like hook automatically captures constructor arguments
+    and stores them in the graph's metadata. This enables:
+    - Visualization (bx.display shows constructor args)
+    - Serialization (can reconstruct modules from metadata)
+    - Debugging (easy to inspect what was passed)
+    """
+    super().__init_subclass__(**kwargs)
+
+    original_init = cls.__init__
+
+    # Skip wrapping if no __init__ or can't get signature.
+    try:
+      sig = inspect.signature(original_init)
+    except ValueError:
       return
 
-    frame = current_frame.f_back
+    @functools.wraps(original_init)
+    def wrapped_init(self: 'Module', *args: Any, **kwargs: Any) -> None:
+      # Capture args only at the outermost class in inheritance chain.
+      # This ensures child class args take precedence over parent class args.
+      should_capture = not hasattr(self, '_blox_captured_args')
+      if should_capture:
+        bound = sig.bind(self, *args, **kwargs)
+        bound.apply_defaults()
+        self._blox_captured_args = {
+            k: v
+            for k, v in bound.arguments.items()
+            if k not in {'self', 'graph', '__class__'}
+        }
+        self._blox_captured_type = cls.__name__
 
-    # Walk up the stack to find the *first* frame that is NOT Module.__init__
-    # but still belongs to 'self'. This handles arbitrary inheritance depth.
-    target_frame = None
+      original_init(self, *args, **kwargs)
 
-    while frame:
-      # We look for the __init__ method of the actual instance.
-      if (
-        frame.f_code.co_name == '__init__'
-        and frame.f_locals.get('self') is self
-      ):
-        # We found a valid __init__ for this object.
-        # Update target_frame and keep going up to find the most specific subclass.
-        target_frame = frame
-        frame = frame.f_back
-      else:
-        # We stepped out of the constructor chain. Stop.
-        break
+      # Verify super().__init__ was called.
+      if getattr(self, 'graph', None) is None:
+        raise RuntimeError(
+            f"Module '{cls.__name__}' failed to initialize. "
+            'Did you forget to call super().__init__(graph)?'
+        )
 
-    if target_frame:
-      # Get explicit argument names and values.
-      arg_info = inspect.getargvalues(target_frame)
+      # Flush captured data to graph metadata.
+      if should_capture:
+        self.graph.metadata['__type__'] = self._blox_captured_type
+        self.graph.metadata.update(self._blox_captured_args)
+        del self._blox_captured_args
+        del self._blox_captured_type
 
-      config = {}
+    cls.__init__ = wrapped_init
 
-      # Capture standard arguments (positional/keyword).
-      for arg_name in arg_info.args:
-        if arg_name not in ('self', 'graph', '__class__'):
-          config[arg_name] = arg_info.locals[arg_name]
-      if arg_info.keywords:
-        kwargs = arg_info.locals[arg_info.keywords]
-        config.update(kwargs)
+  # ============================================================================
+  # Parameter Access
+  # ============================================================================
 
-      # Filter out private attributes.
-      clean_config = {k: v for k, v in config.items() if not k.startswith('_')}
+  def get_param(
+      self,
+      params: Params,
+      name: str,
+      shape: Shape,
+      init: Initializer,
+      dtype: jnp.dtype = jnp.float32,
+      trainable: bool = True,
+      metadata: dict[str, Any] | None = None,
+  ) -> tuple[jax.Array, Params]:
+    """Gets or creates a parameter in this module's namespace.
 
-      self.graph.metadata.update(clean_config)
+    On first call, creates a new parameter using the initializer.
+    On subsequent calls, returns the existing parameter value.
+
+    Args:
+      params: The parameter container.
+      name: Local parameter name (e.g., 'kernel', 'bias').
+      shape: Shape of the parameter tensor.
+      init: JAX initializer function.
+      dtype: Data type (default: float32).
+      trainable: Whether gradients should be computed (default: True).
+      metadata: Optional metadata dict. Common keys:
+        - 'sharding': tuple of mesh axis names for model parallelism.
+
+    Returns:
+      Tuple of (parameter_value, updated_params).
+
+    Example:
+      kernel, params = self.get_param(
+          params, 'kernel', (in_size, out_size),
+          jax.nn.initializers.lecun_normal(),
+          metadata={'sharding': (None, 'model')}
+      )
+    """
+    return params._get(
+        self.graph, name, shape, init, dtype, trainable, metadata
+    )
+
+  def set_param(self, params: Params, name: str, value: Any) -> Params:
+    """Updates a parameter value in this module's namespace.
+
+    Args:
+      params: The parameter container.
+      name: Local parameter name.
+      value: New value for the parameter.
+
+    Returns:
+      Updated Params container.
+    """
+    return params._set(self.graph.path + (name,), value)
+
+  # ============================================================================
+  # Special Methods
+  # ============================================================================
+
+  def __repr__(self) -> str:
+    """Returns a string showing the module type and constructor args."""
+    if hasattr(self, 'graph') and hasattr(self.graph, 'metadata'):
+      name = self.graph.metadata.get('__type__', self.__class__.__name__)
+      args = [
+          f'{k}={v!r}'
+          for k, v in self.graph.metadata.items()
+          if k != '__type__'
+      ]
+      return f"{name}({', '.join(args)})"
+    return f'{self.__class__.__name__}()'
 
   @abc.abstractmethod
   def __call__(
-    self,
-    params: Params,
-    *args: Any,
-    **kwargs: Any,
+      self,
+      params: Params,
+      *args: Any,
+      **kwargs: Any,
   ) -> tuple[Any, Params]:
-    """Applies the module."""
+    """Applies the module to inputs.
 
-  def get_param(
-    self,
-    params: Params,
-    name: str,
-    shape: Shape,
-    init: Initializer,
-    dtype: jnp.dtype = jnp.float32,
-    trainable: bool = True,
-    metadata: dict[str, Any] | None = None,
-  ) -> tuple[jax.Array, Params]:
-    """Shortcut to create parameters within this module's graph scope.
-
-    Args:
-      params: The parameters container.
-      name: The local name of the parameter (appended to graph path).
-      shape: The shape of the parameter.
-      init: The initialization function.
-      dtype: The data type.
-      trainable: Whether the parameter is trainable.
-      metadata: Optional metadata dictionary. Common keys include:
-        - 'sharding': tuple of mesh axis names (e.g., (None, 'model'))
-
-    Returns:
-      A tuple containing (parameter_value, new_params_container).
+    All subclasses must implement this method. The signature varies by module
+    type, but the first argument is always `params` and the return value is
+    always `(output, updated_params)`.
     """
-    return params.get(self.graph, name, shape, init, dtype, trainable, metadata)
-
-  def set_param(self, params: Params, name: str, value: Any) -> Params:
-    """Shortcut to update a parameter within this module's graph scope.
-
-    Args:
-      params: The parameters container.
-      name: The local name of the parameter (appended to graph path).
-      value: The new value.
-
-    Returns:
-      A new Params container with the updated value.
-    """
-    full_path = self.graph.path + (name,)
-    return params.set(full_path, value)
 
 
 class Rng(Module):
@@ -747,32 +860,31 @@ class Rng(Module):
     """
     # Get or create key/counter using constant initializers (no RNG needed).
     key_init = jax.nn.initializers.constant(
-      self._init_key, self._init_key.dtype
+        self._init_key, self._init_key.dtype
     )
     counter_init = jax.nn.initializers.constant(0, dtype=jnp.uint32)
 
     base_key, params = self.get_param(
-      params,
-      'key',
-      self._init_key.shape,
-      key_init,
-      dtype=self._init_key.dtype,
-      trainable=False,
+        params,
+        'key',
+        self._init_key.shape,
+        key_init,
+        dtype=self._init_key.dtype,
+        trainable=False,
     )
     counter, params = self.get_param(
-      params, 'counter', (), counter_init, dtype=jnp.uint32, trainable=False
+        params, 'counter', (), counter_init, dtype=jnp.uint32, trainable=False
     )
 
-    # Fold in any axes from params.folded_axes (public property).
+    # Fold in any axes from params.folded_axes. This ensures that different
+    # devices/batch elements get different keys when using shard_map/vmap.
     folded_key = base_key
-    for axis_name in params.folded_axes:
-      axis_idx = jax.lax.axis_index(axis_name)
+    if params.folded_axes:
+      axis_idx = jax.lax.axis_index(params.folded_axes)
       folded_key = jax.random.fold_in(folded_key, axis_idx)
 
-    # Fold in counter for deterministic sequence.
+    # Fold in the counter to obtain a new deterministic key and increment.
     new_key = jax.random.fold_in(folded_key, counter)
-
-    # Increment counter using set_param.
     params = self.set_param(params, 'counter', counter + 1)
 
     return new_key, params
@@ -783,8 +895,8 @@ class Rng(Module):
 # ==============================================================================
 
 StepFn = Callable[
-  [Params, InputsT, StateT, ResetT | None, bool],
-  tuple[tuple[OutputsT, StateT], Params],
+    [Params, InputsT, StateT, ResetT | None, bool],
+    tuple[tuple[OutputsT, StateT], Params],
 ]
 
 
@@ -793,38 +905,13 @@ def _swap_batch_time(x: jax.Array) -> jax.Array:
   return jnp.swapaxes(x, 0, 1)
 
 
-def _scan_init(
-  step_fn: StepFn[InputsT, StateT, OutputsT, ResetT],
-  params: Params,
-  inputs: InputsT,
-  prev_state: StateT,
-  is_reset: ResetT | None,
-  is_training: bool,
-) -> tuple[tuple[OutputsT, StateT], Params]:
-  """Performs a single initialization step and expands output."""
-  # Slice inputs to time 0.
-  inputs_t0 = jax.tree.map(lambda x: x[:, 0], inputs)
-  reset_t0 = jax.tree.map(lambda x: jnp.ones_like(x[:, 0]), is_reset)
-
-  # Run one step to initialize parameters.
-  (out_t0, new_state), new_params = step_fn(
-    params, inputs_t0, prev_state, reset_t0, is_training
-  )
-
-  # Get sequence length.
-  T = jax.tree.leaves(inputs)[0].shape[1]
-  outputs = jax.tree.map(lambda x: jnp.stack([x] * T, axis=1), out_t0)
-
-  return (outputs, new_state), new_params
-
-
 def static_scan(
-  step_fn: StepFn[InputsT, StateT, OutputsT, ResetT],
-  params: Params,
-  inputs: InputsT,
-  prev_state: StateT,
-  is_reset: ResetT | None,
-  is_training: bool,
+    step_fn: StepFn[InputsT, StateT, OutputsT, ResetT],
+    params: Params,
+    inputs: InputsT,
+    prev_state: StateT,
+    is_reset: ResetT | None,
+    is_training: bool,
 ) -> tuple[tuple[OutputsT, StateT], Params]:
   """Performs a Python loop scan over the time dimension.
 
@@ -862,11 +949,6 @@ def static_scan(
   for x in leaves:
     chex.assert_axis_dimension(x, axis=1, expected=T)
 
-  if not params.initialized:
-    return _scan_init(
-      step_fn, params, inputs, prev_state, is_reset, is_training
-    )
-
   outputs_list = []
   current_state = prev_state
   current_params = params
@@ -877,7 +959,7 @@ def static_scan(
 
     # Returns ((out, state), params).
     (out_t, current_state), current_params = step_fn(
-      current_params, inputs_t, current_state, reset_t, is_training
+        current_params, inputs_t, current_state, reset_t, is_training
     )
     outputs_list.append(out_t)
 
@@ -886,12 +968,12 @@ def static_scan(
 
 
 def dynamic_scan(
-  step_fn: StepFn[InputsT, StateT, OutputsT, ResetT],
-  params: Params,
-  inputs: InputsT,
-  prev_state: StateT,
-  is_reset: ResetT | None,
-  is_training: bool,
+    step_fn: StepFn[InputsT, StateT, OutputsT, ResetT],
+    params: Params,
+    inputs: InputsT,
+    prev_state: StateT,
+    is_reset: ResetT | None,
+    is_training: bool,
 ) -> tuple[tuple[OutputsT, StateT], Params]:
   """Performs a compiled jax.lax.scan over the time dimension.
 
@@ -924,8 +1006,8 @@ def dynamic_scan(
     chex.assert_axis_dimension(x, axis=1, expected=T)
 
   if not params.initialized:
-    return _scan_init(
-      step_fn, params, inputs, prev_state, is_reset, is_training
+    return static_scan(
+        step_fn, params, inputs, prev_state, is_reset, is_training
     )
 
   # Swap to [Time, Batch, ...]
@@ -937,13 +1019,13 @@ def dynamic_scan(
     inputs_step, reset_step = scan_inputs
 
     (out, next_state), next_params = step_fn(
-      curr_params, inputs_step, curr_state, reset_step, is_training
+        curr_params, inputs_step, curr_state, reset_step, is_training
     )
     # scan expects ((next_carry), output)
     return (next_state, next_params), out
 
   (final_state, final_params), outputs_t = jax.lax.scan(
-    scan_body, (prev_state, params), (inputs_t, reset_scan)
+      scan_body, (prev_state, params), (inputs_t, reset_scan)
   )
 
   outputs = jax.tree.map(_swap_batch_time, outputs_t)
@@ -964,7 +1046,7 @@ class SequenceBase(Module, Generic[InputsT, StateT, OutputsT, ResetT]):
 
   @abc.abstractmethod
   def initial_state(
-    self, params: Params, inputs: InputsT
+      self, params: Params, inputs: InputsT
   ) -> tuple[StateT, Params]:
     """Computes the initial state for the sequence processing.
 
@@ -979,12 +1061,12 @@ class SequenceBase(Module, Generic[InputsT, StateT, OutputsT, ResetT]):
 
   @abc.abstractmethod
   def __call__(
-    self,
-    params: Params,
-    inputs: InputsT,
-    prev_state: StateT | None,
-    is_reset: ResetT | None = None,
-    is_training: bool = True,
+      self,
+      params: Params,
+      inputs: InputsT,
+      prev_state: StateT | None,
+      is_reset: ResetT | None = None,
+      is_training: bool = True,
   ) -> tuple[tuple[OutputsT, StateT], Params]:
     """Processes a single time step of data.
 
@@ -1003,12 +1085,12 @@ class SequenceBase(Module, Generic[InputsT, StateT, OutputsT, ResetT]):
 
   @abc.abstractmethod
   def apply(
-    self,
-    params: Params,
-    inputs: InputsT,
-    prev_state: StateT | None = None,
-    is_reset: ResetT | None = None,
-    is_training: bool = True,
+      self,
+      params: Params,
+      inputs: InputsT,
+      prev_state: StateT | None = None,
+      is_reset: ResetT | None = None,
+      is_training: bool = True,
   ) -> tuple[tuple[OutputsT, StateT], Params]:
     """Processes a sequence of data [Batch, Time, ...].
 
@@ -1033,8 +1115,8 @@ class SequenceBase(Module, Generic[InputsT, StateT, OutputsT, ResetT]):
 class RecurrenceBase(SequenceBase[InputsT, StateT, OutputsT, ResetT]):
   """Base class for Recurrent Neural Networks (RNNs).
 
-  Implements sequence processing by scanning over the `__call__` method.
-  Handles automatic fallback to static unrolling during initialization.
+  Implements sequence processing `apply` by applying the `__call__` method
+  step-by-step (using either static or dynamic scan).
 
   Subclasses must implement:
   - `initial_state`: Returns the initial hidden state.
@@ -1063,11 +1145,11 @@ class RecurrenceBase(SequenceBase[InputsT, StateT, OutputsT, ResetT]):
     self._is_static = value
 
   def maybe_reset_state(
-    self,
-    params: Params,
-    prev_state: StateT,
-    inputs: InputsT,
-    is_reset: ResetT | None = None,
+      self,
+      params: Params,
+      prev_state: StateT,
+      inputs: InputsT,
+      is_reset: ResetT | None = None,
   ) -> StateT:
     """Helper to reset state based on boolean signal.
 
@@ -1088,45 +1170,24 @@ class RecurrenceBase(SequenceBase[InputsT, StateT, OutputsT, ResetT]):
 
     if isinstance(is_reset, jax.Array):
       state = jax.tree.map(
-        lambda i, p, r=is_reset: jnp.where(r, i, p), initial_state, prev_state
+          lambda i, p, r=is_reset: jnp.where(r, i, p), initial_state, prev_state
       )
     else:
       state = jax.tree.map(
-        lambda i, p, r: jnp.where(r, i, p), initial_state, prev_state, is_reset
+          lambda i, p, r: jnp.where(r, i, p),
+          initial_state,
+          prev_state,
+          is_reset,
       )
     return cast(StateT, state)
 
-  def __call__(
-    self,
-    params: Params,
-    inputs: InputsT,
-    prev_state: StateT | None,
-    is_reset: ResetT | None = None,
-    is_training: bool = True,
-  ) -> tuple[tuple[OutputsT, StateT], Params]:
-    """Processes a single time step of data.
-
-    This method must be implemented by subclasses.
-
-    Args:
-      params: The parameters container.
-      inputs: The input step Pytree. Leaves must have shape [Batch, ...].
-      prev_state: The previous recurrent state. Cannot be None.
-      is_reset: Optional reset signal. Leaves must have shape [Batch].
-      is_training: Boolean flag indicating if the model is in training mode.
-
-    Returns:
-      A nested tuple ((output, new_state), updated_params).
-    """
-    raise NotImplementedError
-
   def apply(
-    self,
-    params: Params,
-    inputs: InputsT,
-    prev_state: StateT | None = None,
-    is_reset: ResetT | None = None,
-    is_training: bool = True,
+      self,
+      params: Params,
+      inputs: InputsT,
+      prev_state: StateT | None = None,
+      is_reset: ResetT | None = None,
+      is_training: bool = True,
   ) -> tuple[tuple[OutputsT, StateT], Params]:
     """Processes a sequence by scanning over __call__.
 
@@ -1161,9 +1222,9 @@ class RecurrenceBase(SequenceBase[InputsT, StateT, OutputsT, ResetT]):
     step_fn = cast(StepFn[InputsT, StateT, OutputsT, ResetT], self)
     if self.is_static:
       return static_scan(
-        step_fn, params, inputs, prev_state, is_reset, is_training
+          step_fn, params, inputs, prev_state, is_reset, is_training
       )
     else:
       return dynamic_scan(
-        step_fn, params, inputs, prev_state, is_reset, is_training
+          step_fn, params, inputs, prev_state, is_reset, is_training
       )

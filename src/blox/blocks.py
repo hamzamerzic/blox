@@ -1,7 +1,18 @@
-"""Standard neural network blocks.
+"""Standard neural network building blocks.
 
-This module contains implementations of common layers like Linear and LSTM.
-It serves as the user-facing library of pre-built components.
+This module provides a collection of pre-built, functional layers ready for use.
+
+Included Layers:
+- **Core:** `Embed`, `Linear`
+- **Convolution:** `Conv`, `ConvTranspose`
+- **Recurrent:** `LSTM`, `GRU`
+- **Normalization:** `LayerNorm`, `RMSNorm`, `BatchNorm`
+- **Regularization:** `Dropout`
+- **Containers:** `Sequential`
+- **Pooling:** `max_pool`, `min_pool`, `avg_pool`
+
+Blocks are usually subclasses of `bx.Module` which strictly follows the
+`(params, inputs) -> (outputs, params)` functional signature.
 """
 
 from typing import Any, Callable, NamedTuple, Sequence
@@ -34,12 +45,12 @@ class Embed(bx.Module):
   """
 
   def __init__(
-    self,
-    graph: bx.Graph,
-    num_embeddings: int,
-    embedding_size: int,
-    embedding_init: Initializer | None = None,
-    embedding_metadata: dict[str, Any] | None = None,
+      self,
+      graph: bx.Graph,
+      num_embeddings: int,
+      embedding_size: int,
+      embedding_init: Initializer | None = None,
+      embedding_metadata: dict[str, Any] | None = None,
   ) -> None:
     """Initializes the Embed module.
 
@@ -58,13 +69,13 @@ class Embed(bx.Module):
       self.embedding_init = embedding_init
     else:
       self.embedding_init = jax.nn.initializers.variance_scaling(
-        1.0, 'fan_in', 'normal', out_axis=0
+          1.0, 'fan_in', 'normal', out_axis=0
       )
 
   def __call__(
-    self,
-    params: bx.Params,
-    indices: jax.Array,
+      self,
+      params: bx.Params,
+      indices: jax.Array,
   ) -> tuple[jax.Array, bx.Params]:
     """Looks up embeddings for the given indices.
 
@@ -76,18 +87,18 @@ class Embed(bx.Module):
       A tuple (embeddings, params). Embeddings have shape [..., embedding_size].
     """
     embedding_matrix, params = self.get_param(
-      params=params,
-      name='embedding',
-      shape=(self.num_embeddings, self.embedding_size),
-      init=self.embedding_init,
-      metadata=self.embedding_metadata,
+        params=params,
+        name='embedding',
+        shape=(self.num_embeddings, self.embedding_size),
+        init=self.embedding_init,
+        metadata=self.embedding_metadata,
     )
     return embedding_matrix[indices], params
 
   def attend(
-    self,
-    params: bx.Params,
-    inputs: jax.Array,
+      self,
+      params: bx.Params,
+      inputs: jax.Array,
   ) -> tuple[jax.Array, bx.Params]:
     """Applies the transpose of the embedding matrix (for weight tying).
 
@@ -102,11 +113,11 @@ class Embed(bx.Module):
       A tuple (logits, params). Logits have shape [..., num_embeddings].
     """
     embedding_matrix, params = self.get_param(
-      params=params,
-      name='embedding',
-      shape=(self.num_embeddings, self.embedding_size),
-      init=self.embedding_init,
-      metadata=self.embedding_metadata,
+        params=params,
+        name='embedding',
+        shape=(self.num_embeddings, self.embedding_size),
+        init=self.embedding_init,
+        metadata=self.embedding_metadata,
     )
     # inputs @ embedding_matrix.T
     return jnp.dot(inputs, embedding_matrix.T), params
@@ -127,14 +138,14 @@ class Linear(bx.Module):
   """
 
   def __init__(
-    self,
-    graph: bx.Graph,
-    output_size: int,
-    use_bias: bool = True,
-    kernel_init: Initializer | None = None,
-    bias_init: Initializer | None = None,
-    kernel_metadata: dict[str, Any] | None = None,
-    bias_metadata: dict[str, Any] | None = None,
+      self,
+      graph: bx.Graph,
+      output_size: int,
+      use_bias: bool = True,
+      kernel_init: Initializer | None = None,
+      bias_init: Initializer | None = None,
+      kernel_metadata: dict[str, Any] | None = None,
+      bias_metadata: dict[str, Any] | None = None,
   ) -> None:
     """Initializes the Linear module.
 
@@ -158,10 +169,10 @@ class Linear(bx.Module):
     self.bias_metadata = bias_metadata
 
   def __call__(
-    self,
-    params: bx.Params,
-    inputs: jax.Array,
-    precision: jax.lax.Precision | None = None,
+      self,
+      params: bx.Params,
+      inputs: jax.Array,
+      precision: jax.lax.Precision | None = None,
   ) -> tuple[jax.Array, bx.Params]:
     """Applies the linear transformation.
 
@@ -182,21 +193,21 @@ class Linear(bx.Module):
 
     input_size = inputs.shape[-1]
     kernel, params = self.get_param(
-      params,
-      'kernel',
-      (input_size, self.output_size),
-      self.kernel_init,
-      metadata=self.kernel_metadata,
+        params,
+        'kernel',
+        (input_size, self.output_size),
+        self.kernel_init,
+        metadata=self.kernel_metadata,
     )
     outputs = jnp.dot(inputs, kernel, precision=precision)
 
     if self.use_bias:
       bias, params = self.get_param(
-        params,
-        'bias',
-        (self.output_size,),
-        self.bias_init,
-        metadata=self.bias_metadata,
+          params,
+          'bias',
+          (self.output_size,),
+          self.bias_init,
+          metadata=self.bias_metadata,
       )
       bias = jnp.broadcast_to(bias, outputs.shape)
       outputs = outputs + bias
@@ -223,9 +234,9 @@ class Sequential(bx.Module):
   """
 
   def __init__(
-    self,
-    graph: bx.Graph,
-    layers: Sequence[bx.Module | Callable[[jax.Array], jax.Array]],
+      self,
+      graph: bx.Graph,
+      layers: Sequence[bx.Module | Callable[[jax.Array], jax.Array]],
   ) -> None:
     """Initializes the Sequential module.
 
@@ -241,9 +252,9 @@ class Sequential(bx.Module):
     self.layers = layers
 
   def __call__(
-    self,
-    params: bx.Params,
-    inputs: jax.Array,
+      self,
+      params: bx.Params,
+      inputs: jax.Array,
   ) -> tuple[jax.Array, bx.Params]:
     """Applies the sequential model.
 
@@ -272,7 +283,7 @@ class LSTMState(NamedTuple):
 
 
 class LSTM(bx.RecurrenceBase[jax.Array, LSTMState, jax.Array, jax.Array]):
-  """Long Short-Term Memory (LSTM) Recurrent Neural Network.
+  r"""Long Short-Term Memory (LSTM) Recurrent Neural Network.
 
   The mathematical definition of the cell is as follows:
 
@@ -305,10 +316,10 @@ class LSTM(bx.RecurrenceBase[jax.Array, LSTMState, jax.Array, jax.Array]):
   """
 
   def __init__(
-    self,
-    graph: bx.Graph,
-    hidden_size: int,
-    is_static: bool = False,
+      self,
+      graph: bx.Graph,
+      hidden_size: int,
+      is_static: bool = False,
   ) -> None:
     """Initializes the LSTM.
 
@@ -324,7 +335,7 @@ class LSTM(bx.RecurrenceBase[jax.Array, LSTMState, jax.Array, jax.Array]):
     self.gates = Linear(graph.child('gates'), output_size=4 * hidden_size)
 
   def initial_state(
-    self, params: bx.Params, inputs: jax.Array
+      self, params: bx.Params, inputs: jax.Array
   ) -> tuple[LSTMState, bx.Params]:
     """Creates the initial zero state.
 
@@ -336,18 +347,21 @@ class LSTM(bx.RecurrenceBase[jax.Array, LSTMState, jax.Array, jax.Array]):
       A tuple (LSTMState, params), where both hidden and cell states are zeros.
     """
     batch_size = inputs.shape[0]
-    return LSTMState(
-      hidden=jnp.zeros((batch_size, self.hidden_size)),
-      cell=jnp.zeros((batch_size, self.hidden_size)),
-    ), params
+    return (
+        LSTMState(
+            hidden=jnp.zeros((batch_size, self.hidden_size)),
+            cell=jnp.zeros((batch_size, self.hidden_size)),
+        ),
+        params,
+    )
 
   def __call__(
-    self,
-    params: bx.Params,
-    inputs: jax.Array,
-    prev_state: LSTMState | None,
-    is_reset: jax.Array | None = None,
-    is_training: bool = True,
+      self,
+      params: bx.Params,
+      inputs: jax.Array,
+      prev_state: LSTMState | None,
+      is_reset: jax.Array | None = None,
+      is_training: bool = True,
   ) -> tuple[tuple[jax.Array, LSTMState], bx.Params]:
     """Computes a single step of the LSTM recurrence.
 
@@ -401,7 +415,7 @@ class GRUState(NamedTuple):
 
 
 class GRU(bx.RecurrenceBase[jax.Array, GRUState, jax.Array, jax.Array]):
-  """Gated Recurrent Unit (GRU).
+  r"""Gated Recurrent Unit (GRU).
 
   The mathematical definition of the cell is as follows:
 
@@ -420,10 +434,10 @@ class GRU(bx.RecurrenceBase[jax.Array, GRUState, jax.Array, jax.Array]):
   """
 
   def __init__(
-    self,
-    graph: bx.Graph,
-    hidden_size: int,
-    is_static: bool = False,
+      self,
+      graph: bx.Graph,
+      hidden_size: int,
+      is_static: bool = False,
   ) -> None:
     """Initializes the GRU.
 
@@ -441,7 +455,7 @@ class GRU(bx.RecurrenceBase[jax.Array, GRUState, jax.Array, jax.Array]):
     self.candidate = Linear(graph.child('candidate'), output_size=hidden_size)
 
   def initial_state(
-    self, params: bx.Params, inputs: jax.Array
+      self, params: bx.Params, inputs: jax.Array
   ) -> tuple[GRUState, bx.Params]:
     """Creates the initial zero state.
 
@@ -456,12 +470,12 @@ class GRU(bx.RecurrenceBase[jax.Array, GRUState, jax.Array, jax.Array]):
     return GRUState(hidden=jnp.zeros((batch_size, self.hidden_size))), params
 
   def __call__(
-    self,
-    params: bx.Params,
-    inputs: jax.Array,
-    prev_state: GRUState | None,
-    is_reset: jax.Array | None = None,
-    is_training: bool = True,
+      self,
+      params: bx.Params,
+      inputs: jax.Array,
+      prev_state: GRUState | None,
+      is_reset: jax.Array | None = None,
+      is_training: bool = True,
   ) -> tuple[tuple[jax.Array, GRUState], bx.Params]:
     """Computes a single step of the GRU recurrence.
 
@@ -522,10 +536,10 @@ class Dropout(bx.Module):
   """
 
   def __init__(
-    self,
-    graph: bx.Graph,
-    rate: float = 0.5,
-    rng: bx.Rng | None = None,
+      self,
+      graph: bx.Graph,
+      rate: float = 0.5,
+      rng: bx.Rng | None = None,
   ) -> None:
     """Initializes the Dropout module.
 
@@ -542,10 +556,10 @@ class Dropout(bx.Module):
     self.rng = rng
 
   def __call__(
-    self,
-    params: bx.Params,
-    inputs: jax.Array,
-    is_training: bool = True,
+      self,
+      params: bx.Params,
+      inputs: jax.Array,
+      is_training: bool = True,
   ) -> tuple[jax.Array, bx.Params]:
     """Applies dropout to the inputs.
 
@@ -579,15 +593,15 @@ class LayerNorm(bx.Module):
   """
 
   def __init__(
-    self,
-    graph: bx.Graph,
-    epsilon: float = 1e-5,
-    use_scale: bool = True,
-    use_bias: bool = True,
-    scale_init: Initializer | None = None,
-    bias_init: Initializer | None = None,
-    axis_name: str | None = None,
-    axis_index_groups: Sequence[Sequence[int]] | None = None,
+      self,
+      graph: bx.Graph,
+      epsilon: float = 1e-5,
+      use_scale: bool = True,
+      use_bias: bool = True,
+      scale_init: Initializer | None = None,
+      bias_init: Initializer | None = None,
+      axis_name: str | None = None,
+      axis_index_groups: Sequence[Sequence[int]] | None = None,
   ) -> None:
     """Initializes the LayerNorm module.
 
@@ -615,9 +629,9 @@ class LayerNorm(bx.Module):
     self.axis_index_groups = axis_index_groups
 
   def __call__(
-    self,
-    params: bx.Params,
-    inputs: jax.Array,
+      self,
+      params: bx.Params,
+      inputs: jax.Array,
   ) -> tuple[jax.Array, bx.Params]:
     """Applies layer normalization.
 
@@ -637,10 +651,10 @@ class LayerNorm(bx.Module):
     # Cross-device aggregation if axis_name is provided.
     if self.axis_name is not None:
       mean = jax.lax.pmean(
-        mean, self.axis_name, axis_index_groups=self.axis_index_groups
+          mean, self.axis_name, axis_index_groups=self.axis_index_groups
       )
       var = jax.lax.pmean(
-        var, self.axis_name, axis_index_groups=self.axis_index_groups
+          var, self.axis_name, axis_index_groups=self.axis_index_groups
       )
 
     # Normalize.
@@ -649,19 +663,19 @@ class LayerNorm(bx.Module):
     # Scale and shift.
     if self.use_scale:
       scale, params = self.get_param(
-        params=params,
-        name='scale',
-        shape=(features,),
-        init=self.scale_init,
+          params=params,
+          name='scale',
+          shape=(features,),
+          init=self.scale_init,
       )
       normalized = normalized * scale
 
     if self.use_bias:
       bias, params = self.get_param(
-        params=params,
-        name='bias',
-        shape=(features,),
-        init=self.bias_init,
+          params=params,
+          name='bias',
+          shape=(features,),
+          init=self.bias_init,
       )
       normalized = normalized + bias
 
@@ -677,13 +691,13 @@ class RMSNorm(bx.Module):
   """
 
   def __init__(
-    self,
-    graph: bx.Graph,
-    epsilon: float = 1e-5,
-    use_scale: bool = True,
-    scale_init: Initializer | None = None,
-    axis_name: str | None = None,
-    axis_index_groups: Sequence[Sequence[int]] | None = None,
+      self,
+      graph: bx.Graph,
+      epsilon: float = 1e-5,
+      use_scale: bool = True,
+      scale_init: Initializer | None = None,
+      axis_name: str | None = None,
+      axis_index_groups: Sequence[Sequence[int]] | None = None,
   ) -> None:
     """Initializes the RMSNorm module.
 
@@ -707,9 +721,9 @@ class RMSNorm(bx.Module):
     self.axis_index_groups = axis_index_groups
 
   def __call__(
-    self,
-    params: bx.Params,
-    inputs: jax.Array,
+      self,
+      params: bx.Params,
+      inputs: jax.Array,
   ) -> tuple[jax.Array, bx.Params]:
     """Applies RMS normalization.
 
@@ -728,7 +742,7 @@ class RMSNorm(bx.Module):
     # Cross-device aggregation if axis_name is provided.
     if self.axis_name is not None:
       mean_sq = jax.lax.pmean(
-        mean_sq, self.axis_name, axis_index_groups=self.axis_index_groups
+          mean_sq, self.axis_name, axis_index_groups=self.axis_index_groups
       )
 
     # Compute RMS.
@@ -740,7 +754,7 @@ class RMSNorm(bx.Module):
     # Scale.
     if self.use_scale:
       scale, params = self.get_param(
-        params, 'scale', (features,), self.scale_init
+          params, 'scale', (features,), self.scale_init
       )
       normalized = normalized * scale
 
@@ -769,16 +783,16 @@ class BatchNorm(bx.Module):
   """
 
   def __init__(
-    self,
-    graph: bx.Graph,
-    momentum: float = 0.9,
-    epsilon: float = 1e-5,
-    use_scale: bool = True,
-    use_bias: bool = True,
-    scale_init: Initializer | None = None,
-    bias_init: Initializer | None = None,
-    axis_name: str | None = None,
-    axis_index_groups: Sequence[Sequence[int]] | None = None,
+      self,
+      graph: bx.Graph,
+      momentum: float = 0.9,
+      epsilon: float = 1e-5,
+      use_scale: bool = True,
+      use_bias: bool = True,
+      scale_init: Initializer | None = None,
+      bias_init: Initializer | None = None,
+      axis_name: str | None = None,
+      axis_index_groups: Sequence[Sequence[int]] | None = None,
   ) -> None:
     """Initializes the BatchNorm module.
 
@@ -807,10 +821,10 @@ class BatchNorm(bx.Module):
     self.axis_index_groups = axis_index_groups
 
   def __call__(
-    self,
-    params: bx.Params,
-    inputs: jax.Array,
-    is_training: bool = True,
+      self,
+      params: bx.Params,
+      inputs: jax.Array,
+      is_training: bool = True,
   ) -> tuple[jax.Array, bx.Params]:
     """Applies batch normalization.
 
@@ -829,18 +843,18 @@ class BatchNorm(bx.Module):
 
     # Get or create running statistics (non-trainable).
     running_mean, params = self.get_param(
-      params=params,
-      name='running_mean',
-      shape=(features,),
-      init=jax.nn.initializers.zeros,
-      trainable=False,
+        params=params,
+        name='running_mean',
+        shape=(features,),
+        init=jax.nn.initializers.zeros,
+        trainable=False,
     )
     running_var, params = self.get_param(
-      params=params,
-      name='running_var',
-      shape=(features,),
-      init=jax.nn.initializers.ones,
-      trainable=False,
+        params=params,
+        name='running_var',
+        shape=(features,),
+        init=jax.nn.initializers.ones,
+        trainable=False,
     )
 
     if is_training:
@@ -851,27 +865,27 @@ class BatchNorm(bx.Module):
       # Cross-device aggregation if axis_name is provided.
       if self.axis_name is not None:
         mean = jax.lax.pmean(
-          mean, self.axis_name, axis_index_groups=self.axis_index_groups
+            mean, self.axis_name, axis_index_groups=self.axis_index_groups
         )
         var = jax.lax.pmean(
-          var, self.axis_name, axis_index_groups=self.axis_index_groups
+            var, self.axis_name, axis_index_groups=self.axis_index_groups
         )
 
       # Update running statistics with exponential moving average.
       # stop_gradient prevents backprop through running stats.
       new_running_mean = self.momentum * running_mean + (
-        1 - self.momentum
+          1 - self.momentum
       ) * jax.lax.stop_gradient(mean)
       new_running_var = self.momentum * running_var + (
-        1 - self.momentum
+          1 - self.momentum
       ) * jax.lax.stop_gradient(var)
 
       # Store updated running statistics.
       params = self.set_param(
-        params=params, name='running_mean', value=new_running_mean
+          params=params, name='running_mean', value=new_running_mean
       )
       params = self.set_param(
-        params=params, name='running_var', value=new_running_var
+          params=params, name='running_var', value=new_running_var
       )
     else:
       # Use running statistics for inference.
@@ -884,7 +898,7 @@ class BatchNorm(bx.Module):
     # Scale and shift.
     if self.use_scale:
       scale, params = self.get_param(
-        params, 'scale', (features,), self.scale_init
+          params, 'scale', (features,), self.scale_init
       )
       normalized = normalized * scale
 
@@ -919,20 +933,20 @@ class Conv(bx.Module):
   """
 
   def __init__(
-    self,
-    graph: bx.Graph,
-    output_channels: int,
-    kernel_size: int | Sequence[int],
-    strides: int | Sequence[int] = 1,
-    padding: PaddingLike = 'SAME',
-    input_dilation: int | Sequence[int] = 1,
-    kernel_dilation: int | Sequence[int] = 1,
-    feature_group_count: int = 1,
-    use_bias: bool = True,
-    kernel_init: Initializer | None = None,
-    bias_init: Initializer | None = None,
-    kernel_metadata: dict[str, Any] | None = None,
-    bias_metadata: dict[str, Any] | None = None,
+      self,
+      graph: bx.Graph,
+      output_channels: int,
+      kernel_size: int | Sequence[int],
+      strides: int | Sequence[int] = 1,
+      padding: PaddingLike = 'SAME',
+      input_dilation: int | Sequence[int] = 1,
+      kernel_dilation: int | Sequence[int] = 1,
+      feature_group_count: int = 1,
+      use_bias: bool = True,
+      kernel_init: Initializer | None = None,
+      bias_init: Initializer | None = None,
+      kernel_metadata: dict[str, Any] | None = None,
+      bias_metadata: dict[str, Any] | None = None,
   ) -> None:
     """Initializes the Conv module.
 
@@ -958,7 +972,7 @@ class Conv(bx.Module):
     super().__init__(graph)
     self.output_channels = output_channels
     self.kernel_size = (
-      (kernel_size,) if isinstance(kernel_size, int) else tuple(kernel_size)
+        (kernel_size,) if isinstance(kernel_size, int) else tuple(kernel_size)
     )
     self.strides = strides
     self.padding = padding
@@ -972,10 +986,10 @@ class Conv(bx.Module):
     self.bias_init = bias_init or jax.nn.initializers.zeros
 
   def __call__(
-    self,
-    params: bx.Params,
-    inputs: jax.Array,
-    precision: jax.lax.Precision | None = None,
+      self,
+      params: bx.Params,
+      inputs: jax.Array,
+      precision: jax.lax.Precision | None = None,
   ) -> tuple[jax.Array, bx.Params]:
     """Applies the convolution.
 
@@ -985,7 +999,8 @@ class Conv(bx.Module):
       precision: Optional precision for the convolution.
 
     Returns:
-      A tuple (output, params). Output has shape (batch, *out_spatial, output_channels).
+      A tuple (output, params), where output has shape
+      (batch, *out_spatial, output_channels).
 
     Raises:
       ValueError: If input rank doesn't match kernel dimensions.
@@ -995,29 +1010,29 @@ class Conv(bx.Module):
 
     if inputs.ndim != expected_rank:
       raise ValueError(
-        f'Expected input rank {expected_rank} for {num_spatial}D conv, '
-        f'got {inputs.ndim}.'
+          f'Expected input rank {expected_rank} for {num_spatial}D conv, '
+          f'got {inputs.ndim}.'
       )
 
     input_channels = inputs.shape[-1]
 
     if input_channels % self.feature_group_count != 0:
       raise ValueError(
-        f'input_channels ({input_channels}) must be divisible by '
-        f'feature_group_count ({self.feature_group_count}).'
+          f'input_channels ({input_channels}) must be divisible by '
+          f'feature_group_count ({self.feature_group_count}).'
       )
 
     # Kernel shape: (*kernel_size, input_channels // groups, output_channels)
     kernel_shape = self.kernel_size + (
-      input_channels // self.feature_group_count,
-      self.output_channels,
+        input_channels // self.feature_group_count,
+        self.output_channels,
     )
     kernel, params = self.get_param(
-      params,
-      'kernel',
-      kernel_shape,
-      self.kernel_init,
-      metadata=self.kernel_metadata,
+        params,
+        'kernel',
+        kernel_shape,
+        self.kernel_init,
+        metadata=self.kernel_metadata,
     )
 
     # Normalize strides and dilations to tuples.
@@ -1033,30 +1048,30 @@ class Conv(bx.Module):
     rhs_spec = (num_spatial + 1, num_spatial) + tuple(range(num_spatial))
     out_spec = (0, num_spatial + 1) + spatial_dims
     dimension_numbers = jax.lax.ConvDimensionNumbers(
-      lhs_spec=lhs_spec, rhs_spec=rhs_spec, out_spec=out_spec
+        lhs_spec=lhs_spec, rhs_spec=rhs_spec, out_spec=out_spec
     )
 
     # Apply convolution.
     outputs = jax.lax.conv_general_dilated(
-      inputs,
-      kernel,
-      window_strides=strides,
-      padding=self.padding,
-      lhs_dilation=input_dilation,
-      rhs_dilation=kernel_dilation,
-      dimension_numbers=dimension_numbers,
-      feature_group_count=self.feature_group_count,
-      precision=precision,
+        inputs,
+        kernel,
+        window_strides=strides,
+        padding=self.padding,
+        lhs_dilation=input_dilation,
+        rhs_dilation=kernel_dilation,
+        dimension_numbers=dimension_numbers,
+        feature_group_count=self.feature_group_count,
+        precision=precision,
     )
 
     # Add bias.
     if self.use_bias:
       bias, params = self.get_param(
-        params,
-        'bias',
-        (self.output_channels,),
-        self.bias_init,
-        metadata=self.bias_metadata,
+          params,
+          'bias',
+          (self.output_channels,),
+          self.bias_init,
+          metadata=self.bias_metadata,
       )
       outputs = outputs + bias
 
@@ -1081,19 +1096,19 @@ class ConvTranspose(bx.Module):
   """
 
   def __init__(
-    self,
-    graph: bx.Graph,
-    output_channels: int,
-    kernel_size: int | Sequence[int],
-    strides: int | Sequence[int] = 1,
-    padding: PaddingLike = 'SAME',
-    kernel_dilation: int | Sequence[int] = 1,
-    feature_group_count: int = 1,
-    use_bias: bool = True,
-    kernel_init: Initializer | None = None,
-    bias_init: Initializer | None = None,
-    kernel_metadata: dict[str, Any] | None = None,
-    bias_metadata: dict[str, Any] | None = None,
+      self,
+      graph: bx.Graph,
+      output_channels: int,
+      kernel_size: int | Sequence[int],
+      strides: int | Sequence[int] = 1,
+      padding: PaddingLike = 'SAME',
+      kernel_dilation: int | Sequence[int] = 1,
+      feature_group_count: int = 1,
+      use_bias: bool = True,
+      kernel_init: Initializer | None = None,
+      bias_init: Initializer | None = None,
+      kernel_metadata: dict[str, Any] | None = None,
+      bias_metadata: dict[str, Any] | None = None,
   ) -> None:
     """Initializes the ConvTranspose module.
 
@@ -1118,7 +1133,7 @@ class ConvTranspose(bx.Module):
     super().__init__(graph)
     self.output_channels = output_channels
     self.kernel_size = (
-      (kernel_size,) if isinstance(kernel_size, int) else tuple(kernel_size)
+        (kernel_size,) if isinstance(kernel_size, int) else tuple(kernel_size)
     )
     self.strides = strides
     self.padding = padding
@@ -1131,10 +1146,10 @@ class ConvTranspose(bx.Module):
     self.bias_init = bias_init or jax.nn.initializers.zeros
 
   def __call__(
-    self,
-    params: bx.Params,
-    inputs: jax.Array,
-    precision: jax.lax.Precision | None = None,
+      self,
+      params: bx.Params,
+      inputs: jax.Array,
+      precision: jax.lax.Precision | None = None,
   ) -> tuple[jax.Array, bx.Params]:
     """Applies the transposed convolution.
 
@@ -1144,7 +1159,8 @@ class ConvTranspose(bx.Module):
       precision: Optional precision for the convolution.
 
     Returns:
-      A tuple (output, params). Output has shape (batch, *out_spatial, output_channels).
+      A tuple (output, params), where output has shape
+      (batch, *out_spatial, output_channels).
 
     Raises:
       ValueError: If input rank doesn't match kernel dimensions.
@@ -1154,30 +1170,30 @@ class ConvTranspose(bx.Module):
 
     if inputs.ndim != expected_rank:
       raise ValueError(
-        f'Expected input rank {expected_rank} for {num_spatial}D conv, '
-        f'got {inputs.ndim}.'
+          f'Expected input rank {expected_rank} for {num_spatial}D conv, '
+          f'got {inputs.ndim}.'
       )
 
     input_channels = inputs.shape[-1]
 
     if input_channels % self.feature_group_count != 0:
       raise ValueError(
-        f'input_channels ({input_channels}) must be divisible by '
-        f'feature_group_count ({self.feature_group_count}).'
+          f'input_channels ({input_channels}) must be divisible by '
+          f'feature_group_count ({self.feature_group_count}).'
       )
 
     # Kernel shape for ConvTranspose:
     # (*kernel_size, output_channels, input_channels // groups)
     kernel_shape = self.kernel_size + (
-      self.output_channels,
-      input_channels // self.feature_group_count,
+        self.output_channels,
+        input_channels // self.feature_group_count,
     )
     kernel, params = self.get_param(
-      params,
-      'kernel',
-      kernel_shape,
-      self.kernel_init,
-      metadata=self.kernel_metadata,
+        params,
+        'kernel',
+        kernel_shape,
+        self.kernel_init,
+        metadata=self.kernel_metadata,
     )
 
     # Normalize strides and dilations to tuples.
@@ -1197,28 +1213,28 @@ class ConvTranspose(bx.Module):
     out_spec = (0, num_spatial + 1) + spatial_dims  # (N, C_out, *spatial)
 
     dimension_numbers = jax.lax.ConvDimensionNumbers(
-      lhs_spec=lhs_spec, rhs_spec=rhs_spec, out_spec=out_spec
+        lhs_spec=lhs_spec, rhs_spec=rhs_spec, out_spec=out_spec
     )
 
     # Apply transposed convolution.
     outputs = jax.lax.conv_transpose(
-      inputs,
-      kernel,
-      strides=strides,
-      padding=self.padding,
-      rhs_dilation=kernel_dilation,
-      dimension_numbers=dimension_numbers,
-      precision=precision,
+        inputs,
+        kernel,
+        strides=strides,
+        padding=self.padding,
+        rhs_dilation=kernel_dilation,
+        dimension_numbers=dimension_numbers,
+        precision=precision,
     )
 
     # Add bias.
     if self.use_bias:
       bias, params = self.get_param(
-        params,
-        'bias',
-        (self.output_channels,),
-        self.bias_init,
-        metadata=self.bias_metadata,
+          params,
+          'bias',
+          (self.output_channels,),
+          self.bias_init,
+          metadata=self.bias_metadata,
       )
       outputs = outputs + bias
 
@@ -1226,10 +1242,10 @@ class ConvTranspose(bx.Module):
 
 
 def max_pool(
-  inputs: jax.Array,
-  window_shape: int | Sequence[int],
-  strides: int | Sequence[int] | None = None,
-  padding: str = 'VALID',
+    inputs: jax.Array,
+    window_shape: int | Sequence[int],
+    strides: int | Sequence[int] | None = None,
+    padding: PaddingLike = 'VALID',
 ) -> jax.Array:
   """Applies max pooling over spatial dimensions.
 
@@ -1239,7 +1255,7 @@ def max_pool(
     inputs: Input array with shape (batch, *spatial_dims, channels).
     window_shape: Size of the pooling window. An int is broadcast to all
       spatial dimensions.
-    strides: Stride of the pooling. If None, uses window_shape (non-overlapping).
+    strides: Stride of the pooling. If None, uses window_shape (no overlap).
     padding: Padding mode. Either 'SAME' or 'VALID'.
 
   Returns:
@@ -1251,11 +1267,11 @@ def max_pool(
   """
   num_spatial = inputs.ndim - 2
   window = _normalize_tuple(
-    window_shape if isinstance(window_shape, int) else tuple(window_shape),
-    num_spatial,
+      window_shape if isinstance(window_shape, int) else tuple(window_shape),
+      num_spatial,
   )
   strides_tuple = (
-    window if strides is None else _normalize_tuple(strides, num_spatial)
+      window if strides is None else _normalize_tuple(strides, num_spatial)
   )
 
   # jax.lax.reduce_window expects window and strides for all dims.
@@ -1264,20 +1280,20 @@ def max_pool(
   full_strides = (1,) + strides_tuple + (1,)
 
   return jax.lax.reduce_window(
-    inputs,
-    init_value=-jnp.inf,
-    computation=jax.lax.max,
-    window_dimensions=full_window,
-    window_strides=full_strides,
-    padding=padding,
+      inputs,
+      init_value=-jnp.inf,
+      computation=jax.lax.max,
+      window_dimensions=full_window,
+      window_strides=full_strides,
+      padding=padding,
   )
 
 
 def min_pool(
-  inputs: jax.Array,
-  window_shape: int | Sequence[int],
-  strides: int | Sequence[int] | None = None,
-  padding: str = 'VALID',
+    inputs: jax.Array,
+    window_shape: int | Sequence[int],
+    strides: int | Sequence[int] | None = None,
+    padding: PaddingLike = 'VALID',
 ) -> jax.Array:
   """Applies min pooling over spatial dimensions.
 
@@ -1287,7 +1303,7 @@ def min_pool(
     inputs: Input array with shape (batch, *spatial_dims, channels).
     window_shape: Size of the pooling window. An int is broadcast to all
       spatial dimensions.
-    strides: Stride of the pooling. If None, uses window_shape (non-overlapping).
+    strides: Stride of the pooling. If None, uses window_shape (no overlap).
     padding: Padding mode. Either 'SAME' or 'VALID'.
 
   Returns:
@@ -1295,11 +1311,11 @@ def min_pool(
   """
   num_spatial = inputs.ndim - 2
   window = _normalize_tuple(
-    window_shape if isinstance(window_shape, int) else tuple(window_shape),
-    num_spatial,
+      window_shape if isinstance(window_shape, int) else tuple(window_shape),
+      num_spatial,
   )
   strides_tuple = (
-    window if strides is None else _normalize_tuple(strides, num_spatial)
+      window if strides is None else _normalize_tuple(strides, num_spatial)
   )
 
   # jax.lax.reduce_window expects window and strides for all dims.
@@ -1308,20 +1324,20 @@ def min_pool(
   full_strides = (1,) + strides_tuple + (1,)
 
   return jax.lax.reduce_window(
-    inputs,
-    init_value=jnp.inf,
-    computation=jax.lax.min,
-    window_dimensions=full_window,
-    window_strides=full_strides,
-    padding=padding,
+      inputs,
+      init_value=jnp.inf,
+      computation=jax.lax.min,
+      window_dimensions=full_window,
+      window_strides=full_strides,
+      padding=padding,
   )
 
 
 def avg_pool(
-  inputs: jax.Array,
-  window_shape: int | Sequence[int],
-  strides: int | Sequence[int] | None = None,
-  padding: str = 'VALID',
+    inputs: jax.Array,
+    window_shape: int | Sequence[int],
+    strides: int | Sequence[int] | None = None,
+    padding: PaddingLike = 'VALID',
 ) -> jax.Array:
   """Applies average pooling over spatial dimensions.
 
@@ -1334,7 +1350,7 @@ def avg_pool(
     inputs: Input array with shape (batch, *spatial_dims, channels).
     window_shape: Size of the pooling window. An int is broadcast to all
       spatial dimensions.
-    strides: Stride of the pooling. If None, uses window_shape (non-overlapping).
+    strides: Stride of the pooling. If None, uses window_shape (no overlap).
     padding: Padding mode. Either 'SAME' or 'VALID'.
 
   Returns:
@@ -1346,11 +1362,11 @@ def avg_pool(
   """
   num_spatial = inputs.ndim - 2
   window = _normalize_tuple(
-    window_shape if isinstance(window_shape, int) else tuple(window_shape),
-    num_spatial,
+      window_shape if isinstance(window_shape, int) else tuple(window_shape),
+      num_spatial,
   )
   strides_tuple = (
-    window if strides is None else _normalize_tuple(strides, num_spatial)
+      window if strides is None else _normalize_tuple(strides, num_spatial)
   )
 
   # jax.lax.reduce_window expects window and strides for all dims.
@@ -1359,12 +1375,12 @@ def avg_pool(
 
   # Sum pooling.
   pooled_sum = jax.lax.reduce_window(
-    inputs,
-    init_value=0.0,
-    computation=jax.lax.add,
-    window_dimensions=full_window,
-    window_strides=full_strides,
-    padding=padding,
+      inputs,
+      init_value=0.0,
+      computation=jax.lax.add,
+      window_dimensions=full_window,
+      window_strides=full_strides,
+      padding=padding,
   )
 
   # Count valid elements in each window.
@@ -1372,12 +1388,12 @@ def avg_pool(
   # crucial for 'SAME' padding where boundary windows have fewer valid elements.
   mask = jnp.ones_like(inputs)
   window_counts = jax.lax.reduce_window(
-    mask,
-    init_value=0.0,
-    computation=jax.lax.add,
-    window_dimensions=full_window,
-    window_strides=full_strides,
-    padding=padding,
+      mask,
+      init_value=0.0,
+      computation=jax.lax.add,
+      window_dimensions=full_window,
+      window_strides=full_strides,
+      padding=padding,
   )
 
   return pooled_sum / window_counts

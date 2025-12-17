@@ -1,8 +1,8 @@
 """Tests for path handling with special characters in names."""
 
+import blox as bx
 import jax
 import jax.numpy as jnp
-import blox as bx
 
 
 def test_slash_in_module_name():
@@ -28,13 +28,14 @@ def test_slash_in_variable_name():
   graph = bx.Graph('root')
 
   class CustomModule(bx.Module):
+
     def __init__(self, g):
       super().__init__(g)
 
     def __call__(self, params, x):
       # Variable name with slash.
       w, params = self.get_param(
-        params, 'weight/bias', (x.shape[-1], 10), jax.nn.initializers.zeros
+          params, 'weight/bias', (x.shape[-1], 10), jax.nn.initializers.zeros
       )
       return x @ w, params
 
@@ -55,13 +56,13 @@ def test_special_characters_in_names():
   graph = bx.Graph('root')
 
   special_names = [
-    'layer.1',
-    'block[0]',
-    'attention:heads',
-    'norm-pre',
-    'fc_1',
-    'émbed',  # Unicode
-    'layer 1',  # Space
+      'layer.1',
+      'block[0]',
+      'attention:heads',
+      'norm-pre',
+      'fc_1',
+      'émbed',  # Unicode
+      'layer 1',  # Space
   ]
 
   x = jnp.ones((2, 5))
@@ -93,11 +94,11 @@ def test_nested_slashes():
 
   # Full path with all slashes preserved.
   expected_path = (
-    'model/v1',
-    'encoder/layer',
-    'attention/head',
-    'proj/out',
-    'kernel',
+      'model/v1',
+      'encoder/layer',
+      'attention/head',
+      'proj/out',
+      'kernel',
   )
   assert expected_path in params._data
 

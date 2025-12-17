@@ -1,11 +1,12 @@
 """Tests for shard_map compatibility with sharded models."""
 
+import blox as bx
 import chex
 import jax
 import jax.numpy as jnp
 import numpy as np
-from jax.sharding import NamedSharding, PartitionSpec as P
-import blox as bx
+from jax.sharding import NamedSharding
+from jax.sharding import PartitionSpec as P
 
 # Set up fake CPU devices for testing.
 chex.set_n_cpu_devices(8)
@@ -23,7 +24,7 @@ def get_partition_spec(params: bx.Params):
     return param
 
   return jax.tree.map(
-    to_pspec, params, is_leaf=lambda x: isinstance(x, bx.Param)
+      to_pspec, params, is_leaf=lambda x: isinstance(x, bx.Param)
   )
 
 
@@ -55,10 +56,10 @@ def test_sharded_linear_model_parallel():
   graph = bx.Graph('root')
   # Weight sharded across output dim (model parallelism).
   linear = bx.Linear(
-    graph.child('linear'),
-    output_size=16,
-    kernel_metadata={'sharding': (None, 'model')},
-    bias_metadata={'sharding': ('model',)},
+      graph.child('linear'),
+      output_size=16,
+      kernel_metadata={'sharding': (None, 'model')},
+      bias_metadata={'sharding': ('model',)},
   )
 
   # Initialize on host.
@@ -75,9 +76,9 @@ def test_sharded_linear_model_parallel():
   # Apply: each device computes its shard of the output.
   @jax.jit
   @jax.shard_map(
-    mesh=mesh,
-    in_specs=(param_specs, P()),
-    out_specs=(P(None, 'model'), param_specs),
+      mesh=mesh,
+      in_specs=(param_specs, P()),
+      out_specs=(P(None, 'model'), param_specs),
   )
   def apply_sharded(params, x):
     out, params = linear(params, x)
@@ -98,10 +99,10 @@ def test_sharded_linear_data_parallel():
 
   graph = bx.Graph('root')
   linear = bx.Linear(
-    graph.child('linear'),
-    output_size=4,
-    kernel_metadata={'sharding': ()},
-    bias_metadata={'sharding': ()},
+      graph.child('linear'),
+      output_size=4,
+      kernel_metadata={'sharding': ()},
+      bias_metadata={'sharding': ()},
   )
 
   # Initialize on host.
@@ -118,9 +119,9 @@ def test_sharded_linear_data_parallel():
   # Apply with data parallelism.
   @jax.jit
   @jax.shard_map(
-    mesh=mesh,
-    in_specs=(param_specs, P('batch', None)),
-    out_specs=(P('batch', None), param_specs),
+      mesh=mesh,
+      in_specs=(param_specs, P('batch', None)),
+      out_specs=(P('batch', None), param_specs),
   )
   def apply_data_parallel(params, x):
     out, params = linear(params, x)
@@ -142,17 +143,17 @@ def test_sharded_mlp_tensor_parallel():
   graph = bx.Graph('root')
   # Column parallel: shard output.
   layer1 = bx.Linear(
-    graph.child('layer1'),
-    output_size=16,
-    kernel_metadata={'sharding': (None, 'model')},
-    bias_metadata={'sharding': ('model',)},
+      graph.child('layer1'),
+      output_size=16,
+      kernel_metadata={'sharding': (None, 'model')},
+      bias_metadata={'sharding': ('model',)},
   )
   # Row parallel: shard input.
   layer2 = bx.Linear(
-    graph.child('layer2'),
-    output_size=4,
-    kernel_metadata={'sharding': ('model', None)},
-    bias_metadata={'sharding': ()},
+      graph.child('layer2'),
+      output_size=4,
+      kernel_metadata={'sharding': ('model', None)},
+      bias_metadata={'sharding': ()},
   )
 
   def mlp(params, x):
@@ -175,9 +176,9 @@ def test_sharded_mlp_tensor_parallel():
   # Apply with tensor parallelism.
   @jax.jit
   @jax.shard_map(
-    mesh=mesh,
-    in_specs=(param_specs, P()),
-    out_specs=(P(), param_specs),
+      mesh=mesh,
+      in_specs=(param_specs, P()),
+      out_specs=(P(), param_specs),
   )
   def apply_mlp(params, x):
     h, params = layer1(params, x)
@@ -214,10 +215,10 @@ def test_init_with_fold_in_axes_produces_different_params():
 
   graph = bx.Graph('root')
   linear = bx.Linear(
-    graph.child('linear'),
-    output_size=4,
-    kernel_metadata={'sharding': ('model',)},
-    bias_metadata={'sharding': ('model',)},
+      graph.child('linear'),
+      output_size=4,
+      kernel_metadata={'sharding': ('model',)},
+      bias_metadata={'sharding': ('model',)},
   )
   # Create Rng outside init_model so it can be reused.
   rng = bx.Rng(graph.child('rng'), seed=42)
@@ -238,9 +239,9 @@ def test_init_with_fold_in_axes_produces_different_params():
   # Actual init inside shard_map - same function!
   @jax.jit
   @jax.shard_map(
-    mesh=mesh,
-    in_specs=P(),
-    out_specs=param_specs,
+      mesh=mesh,
+      in_specs=P(),
+      out_specs=param_specs,
   )
   def init_sharded(x):
     return init_model(x)
@@ -250,9 +251,9 @@ def test_init_with_fold_in_axes_produces_different_params():
   # Apply to get output from each device's params.
   @jax.jit
   @jax.shard_map(
-    mesh=mesh,
-    in_specs=(param_specs, P()),
-    out_specs=(P('model', None), param_specs),
+      mesh=mesh,
+      in_specs=(param_specs, P()),
+      out_specs=(P('model', None), param_specs),
   )
   def apply_model(params, x):
     out, params = linear(params, x)
@@ -265,16 +266,16 @@ def test_init_with_fold_in_axes_produces_different_params():
   shards = out.addressable_shards
   shard_data = [np.asarray(s.data) for s in shards]
   assert not np.allclose(
-    shard_data[0], shard_data[1]
+      shard_data[0], shard_data[1]
   ), 'Different devices should have different params when using fold_in_axes'
 
   # Verify the weight values differ across shards.
   kernel_shards = params._data[
-    ('root', 'linear', 'kernel')
+      ('root', 'linear', 'kernel')
   ].value.addressable_shards
   kernel_shard_data = [np.asarray(s.data) for s in kernel_shards]
   assert not np.allclose(
-    kernel_shard_data[0], kernel_shard_data[1]
+      kernel_shard_data[0], kernel_shard_data[1]
   ), 'Weights should differ across devices with fold_in_axes'
 
 
@@ -288,10 +289,10 @@ def test_init_without_fold_in_axes_produces_same_params():
 
   graph = bx.Graph('root')
   linear = bx.Linear(
-    graph.child('linear'),
-    output_size=4,
-    kernel_metadata={'sharding': ('model',)},
-    bias_metadata={'sharding': ('model',)},
+      graph.child('linear'),
+      output_size=4,
+      kernel_metadata={'sharding': ('model',)},
+      bias_metadata={'sharding': ('model',)},
   )
   # Create Rng outside init_model so it can be reused.
   rng = bx.Rng(graph.child('rng'), seed=42)
@@ -310,9 +311,9 @@ def test_init_without_fold_in_axes_produces_same_params():
   # Init WITHOUT fold_in_axes - all devices get same params.
   @jax.jit
   @jax.shard_map(
-    mesh=mesh,
-    in_specs=P(),
-    out_specs=param_specs,
+      mesh=mesh,
+      in_specs=P(),
+      out_specs=param_specs,
   )
   def init_sharded(x):
     return init_model(x)
@@ -322,9 +323,9 @@ def test_init_without_fold_in_axes_produces_same_params():
   # Apply to get output.
   @jax.jit
   @jax.shard_map(
-    mesh=mesh,
-    in_specs=(param_specs, P()),
-    out_specs=(P('model', None), param_specs),
+      mesh=mesh,
+      in_specs=(param_specs, P()),
+      out_specs=(P('model', None), param_specs),
   )
   def apply_model(params, x):
     out, params = linear(params, x)
@@ -335,11 +336,11 @@ def test_init_without_fold_in_axes_produces_same_params():
   # === Verification ===
   # All devices should have identical weights (wrong for sharded init!).
   kernel_shards = params._data[
-    ('root', 'linear', 'kernel')
+      ('root', 'linear', 'kernel')
   ].value.addressable_shards
   kernel_shard_data = [np.asarray(s.data) for s in kernel_shards]
   assert np.allclose(
-    kernel_shard_data[0], kernel_shard_data[1]
+      kernel_shard_data[0], kernel_shard_data[1]
   ), 'Without fold_in_axes, all devices should have same weights'
 
 
@@ -354,25 +355,25 @@ def test_layernorm_cross_device():
 
   graph = bx.Graph('root')
   ln = bx.LayerNorm(
-    graph.child('ln'), use_scale=False, use_bias=False, axis_name='batch'
+      graph.child('ln'), use_scale=False, use_bias=False, axis_name='batch'
   )
 
   # Each device has different samples.
   x = jnp.concatenate(
-    [
-      jnp.tile(jnp.array([[i, i + 0.5, i + 1, i + 1.5]]), (2, 1))
-      for i in range(4)
-    ],
-    axis=0,
+      [
+          jnp.tile(jnp.array([[i, i + 0.5, i + 1, i + 1.5]]), (2, 1))
+          for i in range(4)
+      ],
+      axis=0,
   )  # Shape (8, 4)
 
   params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=0))
 
   @jax.jit
   @jax.shard_map(
-    mesh=mesh,
-    in_specs=(P(), P('batch', None)),
-    out_specs=P('batch', None),
+      mesh=mesh,
+      in_specs=(P(), P('batch', None)),
+      out_specs=P('batch', None),
   )
   def apply_ln(params, x):
     out, _ = ln(params, x)
@@ -401,14 +402,14 @@ def test_dropout_with_fold_in_axes_different_masks():
 
   @jax.jit
   @jax.shard_map(
-    mesh=mesh,
-    in_specs=P('batch', None),
-    out_specs=P('batch', None),
+      mesh=mesh,
+      in_specs=P('batch', None),
+      out_specs=P('batch', None),
   )
   def apply_dropout_with_fold_in(x):
     # fold_in_axes causes device-unique RNG.
     params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=42)).fold_in_axes(
-      'batch'
+        'batch'
     )
     out, _ = dropout(params, x, is_training=True)
     return out
@@ -420,7 +421,7 @@ def test_dropout_with_fold_in_axes_different_masks():
   out_per_device = out.reshape(4, 2, 16)
   zeros_per_device = [int(jnp.sum(out_per_device[i] == 0.0)) for i in range(4)]
   assert not all(
-    z == zeros_per_device[0] for z in zeros_per_device
+      z == zeros_per_device[0] for z in zeros_per_device
   ), 'Different devices should have different dropout masks with fold_in_axes'
 
 
@@ -433,9 +434,9 @@ def test_dropout_without_fold_in_axes_same_masks():
 
   @jax.jit
   @jax.shard_map(
-    mesh=mesh,
-    in_specs=P('batch', None),
-    out_specs=P('batch', None),
+      mesh=mesh,
+      in_specs=P('batch', None),
+      out_specs=P('batch', None),
   )
   def apply_dropout_no_fold(x):
     # No fold_in_axes = same RNG on all devices.
@@ -450,5 +451,5 @@ def test_dropout_without_fold_in_axes_same_masks():
   out_per_device = out.reshape(4, 2, 16)
   for i in range(1, 4):
     assert jnp.allclose(
-      out_per_device[0], out_per_device[i]
+        out_per_device[0], out_per_device[i]
     ), 'Without fold_in_axes, all devices should have same dropout mask'
