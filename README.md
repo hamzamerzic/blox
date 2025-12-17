@@ -8,8 +8,8 @@
   </p>
 
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="blox is released under the MIT license"></a>
-  <img src="https://img.shields.io/badge/python-3.10+-blue" alt="Python 3.10+">
-  <img src="https://img.shields.io/badge/jax-0.4+-green" alt="JAX 0.4+">
+  <img src="https://img.shields.io/badge/python-3.11+-blue" alt="Python 3.11+">
+  <img src="https://img.shields.io/badge/jax-0.8+-green" alt="JAX 0.8+">
 </div>
 
 ---
@@ -33,7 +33,7 @@ Most JAX neural network libraries try to force Object-Oriented paradigms to make
 
 Since blox uses JAX, check out the [JAX installation instructions](https://jax.readthedocs.io/en/latest/installation.html) for your specific hardware (CPU/GPU/TPU).
 
-You will need Python 3.10 or later. Install blox from PyPi:
+You will need Python 3.11 or later. Install blox from PyPi:
 
 ```bash
 pip install jax-blox
@@ -149,26 +149,49 @@ bx.display(graph, params)
 
 **Output:**
 Notice how `readout` and `mlp` are siblings in the graph, while `hidden` is nested inside `mlp`.
+The `output_projection` in `mlp.__init__` shows a reference to `readout`'s constructor.
 
-```text
-net: Graph # Param: 387 (1.5 KB)(
-  readout=CustomLinear # Param: 33 (132 B)(
-    output_size=1,
-    kernel=Param[T](shape=(32, 1), dtype='float32', value=<jax.Array float32(32, 1) ≈-0.048 ±0.21 [≥-0.38, ≤0.35] nonzero:32>),
-    bias=Param[T](shape=(1,), dtype='float32', value=<jax.Array([0.], dtype=float32)>),
-  ),
-  mlp=CustomMLP # Param: 352 (1.4 KB)(
-    hidden_size=32,
-    output_projection=Link(path='net/readout'),
-    hidden=CustomLinear # Param: 352 (1.4 KB)(output_size=32, kernel=Param[T](shape=(10, 32), dtype='float32', value=<jax.Array float32(10, 32) ≈-0.0016 ±0.22 [≥-0.37, ≤0.38] nonzero:320>), bias=Param[T](shape=(32,), dtype='float32', value=<jax.Array float32(32,) ≈0.0 ±0.0 [≥0.0, ≤0.0] zero:32>)),
-  ),
-  rng=Rng # Param: 2 (12 B)(
-    seed=42,
-    key=Param[N](shape=(), dtype='key<fry>', value=<jax.Array key<fry>()>),
-    counter=Param[N](shape=(), dtype='uint32', value=<jax.Array(2, dtype=uint32)>),
-  ),
-)
-```
+<details open>
+<summary><b>net: Graph</b> <i># Param: 387 (1.5 KB)</i></summary>
+
+<blockquote>
+<details open>
+<summary><b>readout</b>=<b>CustomLinear</b> <i># Param: 33 (132 B)</i></summary>
+<pre>
+__init__=CustomLinear(output_size=1)
+kernel=Param[T](shape=(32, 1), dtype=float32, value=≈-0.048 ±0.21)
+bias=Param[T](shape=(1,), dtype=float32, value=0.0)
+</pre>
+</details>
+
+<details open>
+<summary><b>mlp</b>=<b>CustomMLP</b> <i># Param: 352 (1.4 KB)</i></summary>
+<pre>
+__init__=CustomMLP(hidden_size=32, output_projection=<a href="#readout">CustomLinear(output_size=1)</a>)
+</pre>
+<blockquote>
+<details>
+<summary><b>hidden</b>=<b>CustomLinear</b> <i># Param: 352 (1.4 KB)</i></summary>
+<pre>
+__init__=CustomLinear(output_size=32)
+kernel=Param[T](shape=(10, 32), dtype=float32, value=≈-0.0016 ±0.22)
+bias=Param[T](shape=(32,), dtype=float32, value=0.0)
+</pre>
+</details>
+</blockquote>
+</details>
+
+<details>
+<summary><b>rng</b>=<b>Rng</b> <i># Param: 2 (12 B)</i></summary>
+<pre>
+__init__=Rng(seed=42)
+key=Param[N](shape=(), dtype=key)
+counter=Param[N](shape=(), dtype=uint32, value=2)
+</pre>
+</details>
+</blockquote>
+
+</details>
 
 ## 🔀 Parallel Execution (vmap & shard\_map)
 

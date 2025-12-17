@@ -640,6 +640,11 @@ class Module:
     linear = Linear(graph.child('linear'), output_size=32)
   """
 
+  # Temporary attributes used during __init__ to capture constructor arguments.
+  # Set by __init_subclass__ wrapper, deleted after flushing to graph metadata.
+  _blox_captured_args: dict[str, Any]
+  _blox_captured_type: str
+
   def __init__(self, graph: Graph) -> None:
     """Binds this module to a graph node.
 

@@ -175,16 +175,62 @@ def test_conv_learning():
 
 
 def test_conv_invalid_rank():
-  """Verifies error on mismatched input rank."""
+  """Verifies error when input has too few dimensions."""
   graph = bx.Graph('root')
   conv = bx.Conv(graph.child('conv'), output_channels=16, kernel_size=(3, 3))
 
-  # 1D input for 2D conv.
-  x = jnp.ones((2, 10, 8))
+  # 2D conv needs at least 3 dims (height, width, channels), but only 2 given.
+  x = jnp.ones((10, 8))
   params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=0))
 
   with pytest.raises(ValueError, match='Expected input rank'):
     conv(params, x)
+
+
+def test_conv_unbatched():
+  """Verifies conv works without batch dimension."""
+  graph = bx.Graph('root')
+  conv = bx.Conv(graph.child('conv'), output_channels=16, kernel_size=(3, 3))
+
+  # No batch dimension: (height, width, channels)
+  x = jnp.ones((8, 8, 4))
+  params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=0))
+
+  y, params = conv(params, x)
+  assert y.shape == (8, 8, 16)
+
+
+def test_conv_batched_unbatched_equivalence():
+  """Verifies unbatched output matches batched output for batch_size=1."""
+  graph = bx.Graph('root')
+  conv = bx.Conv(graph.child('conv'), output_channels=16, kernel_size=(3, 3))
+  rng = bx.Rng(graph.child('rng'), seed=0)
+
+  x_unbatched = jnp.ones((8, 8, 4))
+  x_batched = x_unbatched[None, ...]  # Add batch dimension.
+
+  params = bx.Params(rng=rng)
+  y_unbatched, params = conv(params, x_unbatched)
+
+  # Re-run with same params for batched version.
+  y_batched, _ = conv(params, x_batched)
+
+  assert y_unbatched.shape == (8, 8, 16)
+  assert y_batched.shape == (1, 8, 8, 16)
+  assert jnp.allclose(y_unbatched, y_batched[0])
+
+
+def test_conv_multiple_batch_dims():
+  """Verifies conv works with multiple batch dimensions."""
+  graph = bx.Graph('root')
+  conv = bx.Conv(graph.child('conv'), output_channels=16, kernel_size=(3, 3))
+
+  # Multiple batch dims: (batch1, batch2, height, width, channels)
+  x = jnp.ones((2, 3, 8, 8, 4))
+  params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=0))
+
+  y, _ = conv(params, x)
+  assert y.shape == (2, 3, 8, 8, 16)
 
 
 def test_conv3d_shapes():
@@ -320,3 +366,55 @@ def test_conv_transpose_3d_shapes():
 
   # 4x4x4 -> 8x8x8
   assert y.shape == (1, 8, 8, 8, 4)
+
+
+def test_conv_transpose_unbatched():
+  """Verifies conv_transpose works without batch dimension."""
+  graph = bx.Graph('root')
+  conv_t = bx.ConvTranspose(
+      graph.child('conv_t'), output_channels=8, kernel_size=(3, 3), strides=2
+  )
+
+  # No batch dimension: (height, width, channels)
+  x = jnp.ones((4, 4, 4))
+  params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=0))
+
+  y, _ = conv_t(params, x)
+  assert y.shape == (8, 8, 8)
+
+
+def test_conv_transpose_batched_unbatched_equivalence():
+  """Verifies unbatched output matches batched output for batch_size=1."""
+  graph = bx.Graph('root')
+  conv_t = bx.ConvTranspose(
+      graph.child('conv_t'), output_channels=8, kernel_size=(3, 3), strides=2
+  )
+  rng = bx.Rng(graph.child('rng'), seed=0)
+
+  x_unbatched = jnp.ones((4, 4, 4))
+  x_batched = x_unbatched[None, ...]  # Add batch dimension.
+
+  params = bx.Params(rng=rng)
+  y_unbatched, params = conv_t(params, x_unbatched)
+
+  # Re-run with same params for batched version.
+  y_batched, _ = conv_t(params, x_batched)
+
+  assert y_unbatched.shape == (8, 8, 8)
+  assert y_batched.shape == (1, 8, 8, 8)
+  assert jnp.allclose(y_unbatched, y_batched[0])
+
+
+def test_conv_transpose_multiple_batch_dims():
+  """Verifies conv_transpose works with multiple batch dimensions."""
+  graph = bx.Graph('root')
+  conv_t = bx.ConvTranspose(
+      graph.child('conv_t'), output_channels=8, kernel_size=(3, 3), strides=2
+  )
+
+  # Multiple batch dims: (batch1, batch2, height, width, channels)
+  x = jnp.ones((2, 3, 4, 4, 4))
+  params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=0))
+
+  y, _ = conv_t(params, x)
+  assert y.shape == (2, 3, 8, 8, 8)

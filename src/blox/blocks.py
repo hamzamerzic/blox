@@ -15,6 +15,7 @@ Blocks are usually subclasses of `bx.Module` which strictly follows the
 `(params, inputs) -> (outputs, params)` functional signature.
 """
 
+import math
 from typing import Any, Callable, NamedTuple, Sequence
 
 import jax
@@ -919,8 +920,13 @@ def _normalize_tuple(x: int | Sequence[int], n: int) -> tuple[int, ...]:
 class Conv(bx.Module):
   """General N-dimensional convolution layer.
 
-  Supports 1D, 2D, and 3D convolutions based on the length of kernel_size.
-  Uses channels-last convention: (batch, *spatial_dims, channels).
+  The number of spatial dimensions is inferred from kernel_size:
+  - 1-tuple or int: 1D convolution (single spatial dimension)
+  - 2-tuple: 2D convolution (height, width)
+  - 3-tuple: 3D convolution (depth, height, width)
+
+  Supports arbitrary batch dimensions (0 or more). Uses channels-last
+  convention: (*batch, *spatial_dims, channels).
 
   Example:
     # 2D convolution for images (NHWC format)
@@ -930,6 +936,10 @@ class Conv(bx.Module):
     # 1D convolution for sequences (NLC format)
     conv = Conv(graph.child('conv'), output_channels=64, kernel_size=3)
     y, params = conv(params, x)  # x: [batch, length, channels]
+
+    # Unbatched input
+    conv = Conv(graph.child('conv'), output_channels=64, kernel_size=(3, 3))
+    y, params = conv(params, x)  # x: [height, width, channels]
   """
 
   def __init__(
@@ -953,8 +963,9 @@ class Conv(bx.Module):
     Args:
       graph: The graph node for this module.
       output_channels: Number of output channels.
-      kernel_size: Size of the convolutional kernel. An int is broadcast to
-        all spatial dimensions.
+      kernel_size: Shape of the convolutional kernel as a tuple, determining
+        the number of spatial dimensions (e.g., (3, 3) for 2D conv). For 1D
+        convolution, either an int or a 1-tuple can be used.
       strides: Stride of the convolution. An int is broadcast to all spatial
         dimensions.
       padding: Padding mode. Either 'SAME', 'VALID', or a sequence of
@@ -995,26 +1006,36 @@ class Conv(bx.Module):
 
     Args:
       params: The parameters container.
-      inputs: Input array with shape (batch, *spatial_dims, input_channels).
+      inputs: Input array with shape (*batch, *spatial_dims, input_channels).
+        Supports arbitrary batch dimensions (0 or more).
       precision: Optional precision for the convolution.
 
     Returns:
       A tuple (output, params), where output has shape
-      (batch, *out_spatial, output_channels).
+      (*batch, *out_spatial, output_channels).
 
     Raises:
-      ValueError: If input rank doesn't match kernel dimensions.
+      ValueError: If input has fewer dimensions than needed for conv.
     """
     num_spatial = len(self.kernel_size)
-    expected_rank = num_spatial + 2  # batch + spatial + channels
+    min_rank = num_spatial + 1  # spatial + channels (batch is optional)
 
-    if inputs.ndim != expected_rank:
+    if inputs.ndim < min_rank:
       raise ValueError(
-          f'Expected input rank {expected_rank} for {num_spatial}D conv, '
+          f'Expected input rank >= {min_rank} for {num_spatial}D conv '
+          f'(at least {num_spatial} spatial dims + 1 channel dim), '
           f'got {inputs.ndim}.'
       )
 
+    # Handle arbitrary batch dimensions by reshaping.
+    # Input: (*batch, *spatial, channels) -> (combined_batch, *spatial, channels)
+    batch_shape = inputs.shape[: -num_spatial - 1]
+    spatial_shape = inputs.shape[-num_spatial - 1 : -1]
     input_channels = inputs.shape[-1]
+    batch_size = math.prod(batch_shape) if batch_shape else 1
+    inputs_flat = inputs.reshape(
+        (batch_size,) + spatial_shape + (input_channels,)
+    )
 
     if input_channels % self.feature_group_count != 0:
       raise ValueError(
@@ -1053,7 +1074,7 @@ class Conv(bx.Module):
 
     # Apply convolution.
     outputs = jax.lax.conv_general_dilated(
-        inputs,
+        inputs_flat,
         kernel,
         window_strides=strides,
         padding=self.padding,
@@ -1075,6 +1096,13 @@ class Conv(bx.Module):
       )
       outputs = outputs + bias
 
+    # Reshape output back to original batch shape.
+    # Output: (combined_batch, *out_spatial, out_channels) -> (*batch, *out_spatial, out_channels)
+    out_spatial = outputs.shape[1:-1]
+    outputs = outputs.reshape(
+        batch_shape + out_spatial + (self.output_channels,)
+    )
+
     return outputs, params
 
 
@@ -1082,8 +1110,13 @@ class ConvTranspose(bx.Module):
   """General N-dimensional transposed convolution layer.
 
   Also known as deconvolution or fractionally-strided convolution.
-  Supports 1D, 2D, and 3D convolutions based on the length of kernel_size.
-  Uses channels-last convention: (batch, *spatial_dims, channels).
+  The number of spatial dimensions is inferred from kernel_size:
+  - 1-tuple or int: 1D convolution (single spatial dimension)
+  - 2-tuple: 2D convolution (height, width)
+  - 3-tuple: 3D convolution (depth, height, width)
+
+  Supports arbitrary batch dimensions (0 or more). Uses channels-last
+  convention: (*batch, *spatial_dims, channels).
 
   Example:
     # 2D transposed convolution for images (NHWC format)
@@ -1115,8 +1148,9 @@ class ConvTranspose(bx.Module):
     Args:
       graph: The graph node for this module.
       output_channels: Number of output channels.
-      kernel_size: Size of the convolutional kernel. An int is broadcast to
-        all spatial dimensions.
+      kernel_size: Shape of the convolutional kernel as a tuple, determining
+        the number of spatial dimensions (e.g., (3, 3) for 2D conv). For 1D
+        convolution, either an int or a 1-tuple can be used.
       strides: Stride of the convolution. An int is broadcast to all spatial
         dimensions.
       padding: Padding mode. Either 'SAME', 'VALID', or a sequence of
@@ -1155,26 +1189,36 @@ class ConvTranspose(bx.Module):
 
     Args:
       params: The parameters container.
-      inputs: Input array with shape (batch, *spatial_dims, input_channels).
+      inputs: Input array with shape (*batch, *spatial_dims, input_channels).
+        Supports arbitrary batch dimensions (0 or more).
       precision: Optional precision for the convolution.
 
     Returns:
       A tuple (output, params), where output has shape
-      (batch, *out_spatial, output_channels).
+      (*batch, *out_spatial, output_channels).
 
     Raises:
-      ValueError: If input rank doesn't match kernel dimensions.
+      ValueError: If input has fewer dimensions than needed for conv.
     """
     num_spatial = len(self.kernel_size)
-    expected_rank = num_spatial + 2  # batch + spatial + channels
+    min_rank = num_spatial + 1  # spatial + channels (batch is optional)
 
-    if inputs.ndim != expected_rank:
+    if inputs.ndim < min_rank:
       raise ValueError(
-          f'Expected input rank {expected_rank} for {num_spatial}D conv, '
+          f'Expected input rank >= {min_rank} for {num_spatial}D conv_transpose '
+          f'(at least {num_spatial} spatial dims + 1 channel dim), '
           f'got {inputs.ndim}.'
       )
 
+    # Handle arbitrary batch dimensions by reshaping.
+    # Input: (*batch, *spatial, channels) -> (combined_batch, *spatial, channels)
+    batch_shape = inputs.shape[: -num_spatial - 1]
+    spatial_shape = inputs.shape[-num_spatial - 1 : -1]
     input_channels = inputs.shape[-1]
+    batch_size = math.prod(batch_shape) if batch_shape else 1
+    inputs_flat = inputs.reshape(
+        (batch_size,) + spatial_shape + (input_channels,)
+    )
 
     if input_channels % self.feature_group_count != 0:
       raise ValueError(
@@ -1218,7 +1262,7 @@ class ConvTranspose(bx.Module):
 
     # Apply transposed convolution.
     outputs = jax.lax.conv_transpose(
-        inputs,
+        inputs_flat,
         kernel,
         strides=strides,
         padding=self.padding,
@@ -1238,6 +1282,13 @@ class ConvTranspose(bx.Module):
       )
       outputs = outputs + bias
 
+    # Reshape output back to original batch shape.
+    # Output: (combined_batch, *out_spatial, out_channels) -> (*batch, *out_spatial, out_channels)
+    out_spatial = outputs.shape[1:-1]
+    outputs = outputs.reshape(
+        batch_shape + out_spatial + (self.output_channels,)
+    )
+
     return outputs, params
 
 
@@ -1249,44 +1300,75 @@ def max_pool(
 ) -> jax.Array:
   """Applies max pooling over spatial dimensions.
 
-  Uses channels-last convention: (batch, *spatial_dims, channels).
+  The number of spatial dimensions is inferred from window_shape:
+  - 1-tuple or int: 1D pooling (single spatial dimension)
+  - 2-tuple: 2D pooling (height, width)
+  - 3-tuple: 3D pooling (depth, height, width)
+
+  Supports arbitrary batch dimensions (0 or more). Uses channels-last
+  convention: (*batch, *spatial_dims, channels).
 
   Args:
-    inputs: Input array with shape (batch, *spatial_dims, channels).
-    window_shape: Size of the pooling window. An int is broadcast to all
-      spatial dimensions.
+    inputs: Input array with shape (*batch, *spatial_dims, channels).
+    window_shape: Shape of the pooling window as a tuple, determining the
+      number of spatial dimensions. For 1D pooling, an int can be used.
     strides: Stride of the pooling. If None, uses window_shape (no overlap).
-    padding: Padding mode. Either 'SAME' or 'VALID'.
+    padding: Padding mode. Either 'SAME', 'VALID', or a sequence of
+      (low, high) padding pairs for each spatial dimension.
 
   Returns:
     Pooled output array.
 
   Example:
     # 2x2 max pooling with stride 2
-    y = max_pool(x, window_shape=2, strides=2)
+    y = max_pool(x, window_shape=(2, 2), strides=2)
   """
-  num_spatial = inputs.ndim - 2
-  window = _normalize_tuple(
-      window_shape if isinstance(window_shape, int) else tuple(window_shape),
-      num_spatial,
+  window = (
+      (window_shape,) if isinstance(window_shape, int) else tuple(window_shape)
   )
+  num_spatial = len(window)
+  min_rank = num_spatial + 1  # spatial + channels (batch optional)
+
+  if inputs.ndim < min_rank:
+    raise ValueError(
+        f'Expected input rank >= {min_rank} for {num_spatial}D pooling '
+        f'(at least {num_spatial} spatial dims + 1 channel dim), '
+        f'got {inputs.ndim}.'
+    )
+
+  # Handle arbitrary batch dimensions by reshaping.
+  batch_shape = inputs.shape[: -num_spatial - 1]
+  spatial_shape = inputs.shape[-num_spatial - 1 : -1]
+  channels = inputs.shape[-1]
+  batch_size = math.prod(batch_shape) if batch_shape else 1
+  inputs_flat = inputs.reshape((batch_size,) + spatial_shape + (channels,))
+
   strides_tuple = (
       window if strides is None else _normalize_tuple(strides, num_spatial)
   )
 
   # jax.lax.reduce_window expects window and strides for all dims.
-  # Format: (batch, *spatial, channels)
   full_window = (1,) + window + (1,)
   full_strides = (1,) + strides_tuple + (1,)
 
-  return jax.lax.reduce_window(
-      inputs,
+  # Normalize padding for all dimensions (including batch and channel).
+  if isinstance(padding, str):
+    full_padding = padding
+  else:
+    full_padding = ((0, 0),) + tuple(padding) + ((0, 0),)
+
+  outputs = jax.lax.reduce_window(
+      inputs_flat,
       init_value=-jnp.inf,
       computation=jax.lax.max,
       window_dimensions=full_window,
       window_strides=full_strides,
-      padding=padding,
+      padding=full_padding,
   )
+
+  # Reshape output back to original batch shape.
+  out_spatial = outputs.shape[1:-1]
+  return outputs.reshape(batch_shape + out_spatial + (channels,))
 
 
 def min_pool(
@@ -1297,40 +1379,67 @@ def min_pool(
 ) -> jax.Array:
   """Applies min pooling over spatial dimensions.
 
-  Uses channels-last convention: (batch, *spatial_dims, channels).
+  The number of spatial dimensions is inferred from window_shape:
+  - 1-tuple or int: 1D pooling (single spatial dimension)
+  - 2-tuple: 2D pooling (height, width)
+  - 3-tuple: 3D pooling (depth, height, width)
+
+  Supports arbitrary batch dimensions (0 or more). Uses channels-last
+  convention: (*batch, *spatial_dims, channels).
 
   Args:
-    inputs: Input array with shape (batch, *spatial_dims, channels).
-    window_shape: Size of the pooling window. An int is broadcast to all
-      spatial dimensions.
+    inputs: Input array with shape (*batch, *spatial_dims, channels).
+    window_shape: Shape of the pooling window as a tuple, determining the
+      number of spatial dimensions. For 1D pooling, an int can be used.
     strides: Stride of the pooling. If None, uses window_shape (no overlap).
-    padding: Padding mode. Either 'SAME' or 'VALID'.
+    padding: Padding mode. Either 'SAME', 'VALID', or a sequence of
+      (low, high) padding pairs for each spatial dimension.
 
   Returns:
     Pooled output array.
   """
-  num_spatial = inputs.ndim - 2
-  window = _normalize_tuple(
-      window_shape if isinstance(window_shape, int) else tuple(window_shape),
-      num_spatial,
+  window = (
+      (window_shape,) if isinstance(window_shape, int) else tuple(window_shape)
   )
+  num_spatial = len(window)
+  min_rank = num_spatial + 1
+
+  if inputs.ndim < min_rank:
+    raise ValueError(
+        f'Expected input rank >= {min_rank} for {num_spatial}D pooling '
+        f'(at least {num_spatial} spatial dims + 1 channel dim), '
+        f'got {inputs.ndim}.'
+    )
+
+  batch_shape = inputs.shape[: -num_spatial - 1]
+  spatial_shape = inputs.shape[-num_spatial - 1 : -1]
+  channels = inputs.shape[-1]
+  batch_size = math.prod(batch_shape) if batch_shape else 1
+  inputs_flat = inputs.reshape((batch_size,) + spatial_shape + (channels,))
+
   strides_tuple = (
       window if strides is None else _normalize_tuple(strides, num_spatial)
   )
 
-  # jax.lax.reduce_window expects window and strides for all dims.
-  # Format: (batch, *spatial, channels)
   full_window = (1,) + window + (1,)
   full_strides = (1,) + strides_tuple + (1,)
 
-  return jax.lax.reduce_window(
-      inputs,
+  if isinstance(padding, str):
+    full_padding = padding
+  else:
+    full_padding = ((0, 0),) + tuple(padding) + ((0, 0),)
+
+  outputs = jax.lax.reduce_window(
+      inputs_flat,
       init_value=jnp.inf,
       computation=jax.lax.min,
       window_dimensions=full_window,
       window_strides=full_strides,
-      padding=padding,
+      padding=full_padding,
   )
+
+  out_spatial = outputs.shape[1:-1]
+  return outputs.reshape(batch_shape + out_spatial + (channels,))
 
 
 def avg_pool(
@@ -1341,59 +1450,87 @@ def avg_pool(
 ) -> jax.Array:
   """Applies average pooling over spatial dimensions.
 
-  Uses channels-last convention: (batch, *spatial_dims, channels).
+  The number of spatial dimensions is inferred from window_shape:
+  - 1-tuple or int: 1D pooling (single spatial dimension)
+  - 2-tuple: 2D pooling (height, width)
+  - 3-tuple: 3D pooling (depth, height, width)
+
+  Supports arbitrary batch dimensions (0 or more). Uses channels-last
+  convention: (*batch, *spatial_dims, channels).
 
   Note: When padding='SAME', the average is computed over the valid (non-padded)
   pixels in the window, ignoring the zeros added by padding.
 
   Args:
-    inputs: Input array with shape (batch, *spatial_dims, channels).
-    window_shape: Size of the pooling window. An int is broadcast to all
-      spatial dimensions.
+    inputs: Input array with shape (*batch, *spatial_dims, channels).
+    window_shape: Shape of the pooling window as a tuple, determining the
+      number of spatial dimensions. For 1D pooling, an int can be used.
     strides: Stride of the pooling. If None, uses window_shape (no overlap).
-    padding: Padding mode. Either 'SAME' or 'VALID'.
+    padding: Padding mode. Either 'SAME', 'VALID', or a sequence of
+      (low, high) padding pairs for each spatial dimension.
 
   Returns:
     Pooled output array.
 
   Example:
     # 2x2 average pooling with stride 2
-    y = avg_pool(x, window_shape=2, strides=2)
+    y = avg_pool(x, window_shape=(2, 2), strides=2)
   """
-  num_spatial = inputs.ndim - 2
-  window = _normalize_tuple(
-      window_shape if isinstance(window_shape, int) else tuple(window_shape),
-      num_spatial,
+  window = (
+      (window_shape,) if isinstance(window_shape, int) else tuple(window_shape)
   )
+  num_spatial = len(window)
+  min_rank = num_spatial + 1
+
+  if inputs.ndim < min_rank:
+    raise ValueError(
+        f'Expected input rank >= {min_rank} for {num_spatial}D pooling '
+        f'(at least {num_spatial} spatial dims + 1 channel dim), '
+        f'got {inputs.ndim}.'
+    )
+
+  batch_shape = inputs.shape[: -num_spatial - 1]
+  spatial_shape = inputs.shape[-num_spatial - 1 : -1]
+  channels = inputs.shape[-1]
+  batch_size = math.prod(batch_shape) if batch_shape else 1
+  inputs_flat = inputs.reshape((batch_size,) + spatial_shape + (channels,))
+
   strides_tuple = (
       window if strides is None else _normalize_tuple(strides, num_spatial)
   )
 
-  # jax.lax.reduce_window expects window and strides for all dims.
   full_window = (1,) + window + (1,)
   full_strides = (1,) + strides_tuple + (1,)
 
+  if isinstance(padding, str):
+    full_padding = padding
+  else:
+    full_padding = ((0, 0),) + tuple(padding) + ((0, 0),)
+
   # Sum pooling.
   pooled_sum = jax.lax.reduce_window(
-      inputs,
+      inputs_flat,
       init_value=0.0,
       computation=jax.lax.add,
       window_dimensions=full_window,
       window_strides=full_strides,
-      padding=padding,
+      padding=full_padding,
   )
 
   # Count valid elements in each window.
   # This allows us to divide by the correct count (ignoring padding), which is
   # crucial for 'SAME' padding where boundary windows have fewer valid elements.
-  mask = jnp.ones_like(inputs)
+  mask = jnp.ones_like(inputs_flat)
   window_counts = jax.lax.reduce_window(
       mask,
       init_value=0.0,
       computation=jax.lax.add,
       window_dimensions=full_window,
       window_strides=full_strides,
-      padding=padding,
+      padding=full_padding,
   )
 
-  return pooled_sum / window_counts
+  outputs = pooled_sum / window_counts
+
+  out_spatial = outputs.shape[1:-1]
+  return outputs.reshape(batch_shape + out_spatial + (channels,))
