@@ -17,5 +17,5 @@ repos:
         name: Execute Jupyter notebooks
         entry: jupyter nbconvert --to notebook --execute --inplace
         language: system
-        files: ^docs/.*\.ipynb$
+        files: ^docs/readme_examples\.ipynb$
         pass_filenames: true

@@ -1517,20 +1517,24 @@ def avg_pool(
       padding=full_padding,
   )
 
-  # Count valid elements in each window.
-  # This allows us to divide by the correct count (ignoring padding), which is
-  # crucial for 'SAME' padding where boundary windows have fewer valid elements.
-  mask = jnp.ones_like(inputs_flat)
-  window_counts = jax.lax.reduce_window(
-      mask,
-      init_value=0.0,
-      computation=jax.lax.add,
-      window_dimensions=full_window,
-      window_strides=full_strides,
-      padding=full_padding,
-  )
-
-  outputs = pooled_sum / window_counts
+  # For 'VALID' padding, all windows are full so we divide by a constant.
+  # For 'SAME' or explicit padding, we count valid elements per window.
+  if padding == 'VALID':
+    window_size = math.prod(window)
+    outputs = pooled_sum / window_size
+  else:
+    # Count valid elements in each window. Crucial for 'SAME' padding where
+    # boundary windows may have fewer valid elements.
+    mask = jnp.ones_like(inputs_flat)
+    window_counts = jax.lax.reduce_window(
+        mask,
+        init_value=0.0,
+        computation=jax.lax.add,
+        window_dimensions=full_window,
+        window_strides=full_strides,
+        padding=full_padding,
+    )
+    outputs = pooled_sum / window_counts
 
   out_spatial = outputs.shape[1:-1]
   return outputs.reshape(batch_shape + out_spatial + (channels,))

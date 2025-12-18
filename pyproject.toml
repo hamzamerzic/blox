@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "jax-blox"
-version = "0.1.3"
+version = "0.1.3.post1"
 description = "A functional and lightweight neural network library for JAX."
 readme = "README.md"
 requires-python = ">=3.11"
