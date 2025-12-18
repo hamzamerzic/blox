@@ -341,7 +341,7 @@ def test_vmap_init_produces_different_params():
   def init(x):
     params = bx.Params(rng=rng).fold_in_axes('batch')
     _, params = linear(params, x)
-    return params.finalize()
+    return params.finalized()
 
   params_batch = jax.vmap(init, axis_name='batch')(jnp.ones((4, 1, 3)))
 
@@ -366,7 +366,7 @@ def test_nested_vmap_mlp_apply():
     x, params = layer1(params, x)
     x, params = dropout(params, x, is_training=False)
     _, params = layer2(params, x)
-    return params.finalize()
+    return params.finalized()
 
   x_sample = jnp.ones((1, 16))
   params = init_model(x_sample)

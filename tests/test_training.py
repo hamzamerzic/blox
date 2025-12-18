@@ -27,7 +27,7 @@ def test_rng_updates_during_training():
   _, params = model(params, x)
 
   # NOW we finalize, to prevent accidental creation during training.
-  params = params.finalize()
+  params = params.finalized()
 
   initial_counter = params._data[counter_path].value
 
@@ -142,7 +142,7 @@ def test_checkpoint_produces_correct_gradients():
   # Initialize params by running forward.
   params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=42))
   _, params = forward(params, x)
-  params = params.finalize()
+  params = params.finalized()
 
   trainable, non_trainable = params.split()
 
@@ -211,7 +211,7 @@ def test_checkpoint_with_dropout():
   # Initialize params by running forward.
   params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=42))
   _, params = forward(params, x)
-  params = params.finalize()
+  params = params.finalized()
 
   trainable, non_trainable = params.split()
 
@@ -246,3 +246,82 @@ def test_checkpoint_with_dropout():
       nt_normal._data[counter_path].value
       == nt_checkpointed._data[counter_path].value
   )
+
+
+def test_rng_get_set_base_key():
+  """Verifies get_base_key and set_base_key methods on Rng."""
+  graph = bx.Graph('root')
+  rng = bx.Rng(graph.child('rng'), seed=42)
+  params = bx.Params(rng=rng)
+
+  # get_base_key creates the key param if needed.
+  key1, params = rng.get_base_key(params)
+  assert key1 is not None
+
+  # get_base_key returns the same key on subsequent calls.
+  key2, params = rng.get_base_key(params)
+  assert jnp.array_equal(key1, key2)
+
+  # set_base_key returns params with updated key.
+  new_key = jax.random.key(999)
+  new_params = rng.set_base_key(params, new_key)
+
+  key3, _ = rng.get_base_key(new_params)
+  assert jnp.array_equal(key3, new_key)
+  assert not jnp.array_equal(key3, key1)
+
+  # Original params unchanged.
+  key_orig, _ = rng.get_base_key(params)
+  assert jnp.array_equal(key_orig, key1)
+
+
+def test_rng_get_set_counter():
+  """Verifies get_counter and set_counter methods on Rng."""
+  graph = bx.Graph('root')
+  rng = bx.Rng(graph.child('rng'), seed=42)
+  params = bx.Params(rng=rng)
+
+  # get_counter creates the counter param if needed (starts at 0).
+  counter1, params = rng.get_counter(params)
+  assert counter1 == 0
+
+  # Calling next_key increments the counter.
+  _, params = params.next_key()
+  counter2, _ = rng.get_counter(params)
+  assert counter2 == 1
+
+  # set_counter returns params with updated counter.
+  new_params = rng.set_counter(params, 100)
+  counter3, _ = rng.get_counter(new_params)
+  assert counter3 == 100
+
+  # Original params unchanged.
+  counter_orig, _ = rng.get_counter(params)
+  assert counter_orig == 1
+
+
+def test_rng_reseed_pattern():
+  """Verifies the reseed pattern using set_base_key and set_counter."""
+  graph = bx.Graph('root')
+  rng = bx.Rng(graph.child('rng'), seed=42)
+  params = bx.Params(rng=rng)
+
+  # Initialize and consume some keys.
+  _, params = params.next_key()
+  _, params = params.next_key()
+  _, params = params.next_key()
+  params = params.finalized()
+
+  counter_before, _ = rng.get_counter(params)
+  assert counter_before == 3
+
+  # Reseed: set new key and reset counter.
+  new_key = jax.random.key(999)
+  reseeded = rng.set_base_key(params, new_key)
+  reseeded = rng.set_counter(reseeded, 0)
+
+  counter_after, _ = rng.get_counter(reseeded)
+  assert counter_after == 0
+
+  key_after, _ = rng.get_base_key(reseeded)
+  assert jnp.array_equal(key_after, new_key)

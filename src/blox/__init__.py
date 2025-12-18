@@ -1,5 +1,7 @@
 """blox: A functional and lightweight neural network library for JAX.
 
+Version: Use `blox.__version__` to get the installed version.
+
 **blox** unlocks the full potential of JAX by embracing its functional nature.
 Instead of forcing Object-Oriented paradigms (like PyTorch's `nn.Module`) onto
 JAX, **blox** provides a minimal abstraction layer that keeps state explicit
@@ -19,8 +21,8 @@ Key Concepts:
 
 Gotchas:
 - **Purity:** Modules must be pure. Do not store state in `self`. Use `get_param`.
-- **Initialization:** You must `finalize()` the params after the first pass to
-  prevent accidental creation of new parameters during training/inference.
+- **Initialization:** You must call `finalized()` on params after the first pass
+  to prevent accidental creation of new parameters during training/inference.
 - **Sequence Models:** RNNs (`LSTM`, `GRU`) process entire sequences by default
   using `jax.lax.scan`. Use `__call__` for single-step processing.
 """
@@ -55,6 +57,10 @@ from .interfaces import (
     static_scan,
 )
 from .visualize import display
+
+from importlib.metadata import version as _version
+
+__version__ = _version('jax-blox')
 
 __all__ = [
     # Core.

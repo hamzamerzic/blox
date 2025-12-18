@@ -15,7 +15,7 @@ def test_slash_in_module_name():
   params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=0))
 
   y, params = layer(params, x)
-  params = params.finalize()
+  params = params.finalized()
 
   assert y.shape == (2, 10)
   # Path should be a tuple with the slash preserved in the name.
@@ -45,7 +45,7 @@ def test_slash_in_variable_name():
   params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=0))
 
   _, params = layer(params, x)
-  params = params.finalize()
+  params = params.finalized()
 
   # The slash should be preserved in the variable name.
   assert ('root', 'custom', 'weight/bias') in params._data
@@ -72,7 +72,7 @@ def test_special_characters_in_names():
     layer = bx.Linear(graph.child(name), output_size=3)
     _, params = layer(params, x)
 
-  params = params.finalize()
+  params = params.finalized()
 
   # All should be present.
   for name in special_names:
@@ -90,7 +90,7 @@ def test_nested_slashes():
   params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=0))
 
   _, params = layer(params, x)
-  params = params.finalize()
+  params = params.finalized()
 
   # Full path with all slashes preserved.
   expected_path = (
@@ -112,7 +112,7 @@ def test_split_with_special_characters():
   params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=0))
 
   _, params = layer(params, x)
-  params = params.finalize()
+  params = params.finalized()
 
   # Split should work - the predicate receives proper tuple paths.
   trainable, non_trainable = params.split()
@@ -122,7 +122,7 @@ def test_split_with_special_characters():
   assert ('root', 'layer/1', 'bias') in trainable._data
 
   # Non-trainable should have RNG (stored under Rng module's graph path).
-  assert ('root', 'rng', 'key') in non_trainable._data
+  assert ('root', 'rng', 'base_key') in non_trainable._data
   assert ('root', 'rng', 'counter') in non_trainable._data
 
 
@@ -144,7 +144,7 @@ def test_custom_split():
   x = jnp.ones((2, 5))
   params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=0))
   _, params = layer(params, x)
-  params = params.finalize()
+  params = params.finalized()
 
   kernel, rest = params.split(lambda path, param: path[-1] == 'kernel')
 
@@ -152,5 +152,5 @@ def test_custom_split():
   assert ('model/v1', 'layer/1', 'kernel') in kernel._data
 
   assert ('model/v1', 'layer/1', 'bias') in rest._data
-  assert ('model/v1', 'rng', 'key') in rest._data
+  assert ('model/v1', 'rng', 'base_key') in rest._data
   assert ('model/v1', 'rng', 'counter') in rest._data

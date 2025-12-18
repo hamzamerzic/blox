@@ -141,7 +141,7 @@ params = bx.Params(rng=rng)
 unused_outputs, params = model(params, inputs)
 
 # Finalize Params to prevent accidental structure changes later.
-params = params.finalize()
+params = params.finalized()
 
 # Visualize the full graph and parameter structure.
 bx.display(graph, params)
@@ -185,8 +185,8 @@ bias=Param[T](shape=(32,), dtype=float32, value=0.0)
 <summary><b>rng</b>=<b>Rng</b> <i># Param: 2 (12 B)</i></summary>
 <pre>
 __init__=Rng(seed=42)
-key=Param[N](shape=(), dtype=key)
-counter=Param[N](shape=(), dtype=uint32, value=2)
+base_key=Param[N](shape=(), dtype=key, metadata={'tag': 'rng_base_key'})
+counter=Param[N](shape=(), dtype=uint32, metadata={'tag': 'rng_counter'}, value=2)
 </pre>
 </details>
 </blockquote>
@@ -236,7 +236,7 @@ rng = bx.Rng(graph.child('rng'), 42)
 # Define an initialization function.
 def init(x):
   _, params = linear(bx.Params(rng=rng), x)
-  return params.finalize()
+  return params.finalized()
 
 # Abstract evaluation to get the Params structure (no memory allocation).
 inputs = jnp.ones((4, 4))

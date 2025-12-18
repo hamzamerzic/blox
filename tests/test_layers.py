@@ -20,7 +20,7 @@ def test_linear_shapes():
   assert y.shape == (2, 10)
 
   # Check params existed.
-  frozen = params.finalize()
+  frozen = params.finalized()
   # Path is ('root', 'linear', 'kernel') because graph was "root" -> child("linear").
   # Note: Access .value because _data stores Param objects.
   kernel_shape = frozen._data[('root', 'linear', 'kernel')].value.shape
@@ -43,7 +43,7 @@ def test_linear_learning():
 
   # Initialize.
   _, params = layer(params, x)
-  frozen_params = params.finalize()
+  frozen_params = params.finalized()
 
   # Train step.
   @jax.jit

@@ -992,9 +992,9 @@ class Conv(bx.Module):
     self.feature_group_count = feature_group_count
     self.use_bias = use_bias
     self.kernel_init = kernel_init or jax.nn.initializers.lecun_normal()
+    self.bias_init = bias_init or jax.nn.initializers.zeros
     self.kernel_metadata = kernel_metadata
     self.bias_metadata = bias_metadata
-    self.bias_init = bias_init or jax.nn.initializers.zeros
 
   def __call__(
       self,
@@ -1175,9 +1175,9 @@ class ConvTranspose(bx.Module):
     self.feature_group_count = feature_group_count
     self.use_bias = use_bias
     self.kernel_init = kernel_init or jax.nn.initializers.lecun_normal()
+    self.bias_init = bias_init or jax.nn.initializers.zeros
     self.kernel_metadata = kernel_metadata
     self.bias_metadata = bias_metadata
-    self.bias_init = bias_init or jax.nn.initializers.zeros
 
   def __call__(
       self,

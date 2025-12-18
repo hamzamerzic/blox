@@ -45,6 +45,13 @@ dev = [
 [tool.hatch.build.targets.wheel]
 packages = ["src/blox"]
 
+[tool.hatch.build.targets.sdist]
+include = [
+  "src",
+  "README.md",
+  "LICENSE",
+]
+
 [tool.pytest.ini_options]
 addopts = "-ra -q"
 testpaths = ["tests"]

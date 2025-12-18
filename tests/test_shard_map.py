@@ -66,7 +66,7 @@ def test_sharded_linear_model_parallel():
   x_sample = jnp.ones((1, 8))
   params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=42))
   _, params = linear(params, x_sample)
-  params = params.finalize()
+  params = params.finalized()
 
   # Shard params according to metadata.
   param_specs = get_partition_spec(params)
@@ -109,7 +109,7 @@ def test_sharded_linear_data_parallel():
   x_sample = jnp.ones((1, 3))
   params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=42))
   _, params = linear(params, x_sample)
-  params = params.finalize()
+  params = params.finalized()
 
   # Replicate params.
   param_specs = get_partition_spec(params)
@@ -166,7 +166,7 @@ def test_sharded_mlp_tensor_parallel():
   x_sample = jnp.ones((1, 8))
   params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=42))
   _, params = mlp(params, x_sample)
-  params = params.finalize()
+  params = params.finalized()
 
   # Shard params.
   param_specs = get_partition_spec(params)
@@ -228,7 +228,7 @@ def test_init_with_fold_in_axes_produces_different_params():
     params = bx.Params(rng=rng).fold_in_axes('model')
     _, params = linear(params, x)
     # fold_out_axes to match pytree metadata with eval_shape.
-    return params.fold_out_axes('model').finalize()
+    return params.fold_out_axes('model').finalized()
 
   x_sample = jnp.ones((1, 3))
 
@@ -302,7 +302,7 @@ def test_init_without_fold_in_axes_produces_same_params():
     # No fold_in_axes = all devices use same RNG sequence.
     params = bx.Params(rng=rng)
     _, params = linear(params, x)
-    return params.finalize()
+    return params.finalized()
 
   x_sample = jnp.ones((1, 3))
   params_structure = jax.eval_shape(init_model, x_sample)

@@ -234,7 +234,7 @@ class Params:
 
     # Forward pass creates parameters
     _, params = model(params, x)
-    params = params.finalize()
+    params = params.finalized()
 
     # Training loop
     trainable, non_trainable = params.split()
@@ -288,15 +288,12 @@ class Params:
     """
     return self._rng(self)
 
-  def finalize(self) -> 'Params':
-    """Marks initialization complete, preventing new parameter creation.
+  def finalized(self) -> 'Params':
+    """Returns finalized params that prevent new parameter creation.
 
     After finalization, attempting to create new parameters via get_param
     will raise KeyError. This catches bugs where parameter names change
     between training runs.
-
-    Returns:
-      A new finalized Params instance.
     """
     p = self._clone()
     p._initialized = True
@@ -427,7 +424,7 @@ class Params:
       def init_sharded(x):
         params = bx.Params(rng=rng).fold_in_axes('model')
         _, params = model(params, x)
-        return params.fold_out_axes('model').finalize()
+        return params.fold_out_axes('model').finalized()
     """
     if not axis_names:
       return self
@@ -528,7 +525,10 @@ class Params:
     if self._initialized:
       raise KeyError(f"Parameter '{full_path}' missing (params finalized).")
 
-    # Try constant initializer (key=None), fall back to RNG.
+    # Try using a constant initializer (key=None), fall back to RNG.
+    # Any real bugs will surface when calling init() with a proper key below, so
+    # we can catch general exceptions with key=None. This also prevents infinite
+    # recursion in the Rng module (which uses constant initializers).
     try:
       val = init(None, shape, dtype)  # type: ignore
       new_p = self._clone()
@@ -844,42 +844,77 @@ class Rng(Module):
       seed: Integer seed or JAX key array.
     """
     super().__init__(graph)
-    self.seed = seed
     # Store initial key value (will be initialized via get_param on first call).
     if isinstance(seed, int):
       self._init_key = jax.random.key(seed)
     else:
       self._init_key = seed
 
-  def __call__(self, params: Params) -> tuple[jax.Array, Params]:
-    """Generate next key, respecting params' folded axes.
-
-    The key and counter are stored as non-trainable params under this
-    module's graph path (using get_param). Each call increments the counter.
+  def get_base_key(self, params: Params) -> tuple[jax.Array, Params]:
+    """Returns (base_key, params), creating the param if needed.
 
     Args:
       params: The params container.
-
-    Returns:
-      Tuple of (new_key, updated_params).
     """
-    # Get or create key/counter using constant initializers (no RNG needed).
     key_init = jax.nn.initializers.constant(
         self._init_key, self._init_key.dtype
     )
-    counter_init = jax.nn.initializers.constant(0, dtype=jnp.uint32)
-
-    base_key, params = self.get_param(
-        params,
-        'key',
-        self._init_key.shape,
-        key_init,
+    return self.get_param(
+        params=params,
+        name='base_key',
+        shape=self._init_key.shape,
+        init=key_init,
         dtype=self._init_key.dtype,
         trainable=False,
+        metadata={'tag': 'rng_base_key'},
     )
-    counter, params = self.get_param(
-        params, 'counter', (), counter_init, dtype=jnp.uint32, trainable=False
+
+  def get_counter(self, params: Params) -> tuple[jax.Array, Params]:
+    """Returns (counter, params), creating the param if needed.
+
+    Args:
+      params: The params container.
+    """
+    counter_init = jax.nn.initializers.constant(0, dtype=jnp.uint32)
+    return self.get_param(
+        params=params,
+        name='counter',
+        shape=(),
+        init=counter_init,
+        dtype=jnp.uint32,
+        trainable=False,
+        metadata={'tag': 'rng_counter'},
     )
+
+  def set_base_key(self, params: Params, key: jax.Array) -> Params:
+    """Returns params with the base key updated.
+
+    Args:
+      params: The params container.
+      key: New key value.
+    """
+    return self.set_param(params, 'base_key', key)
+
+  def set_counter(self, params: Params, counter: int | jax.Array) -> Params:
+    """Returns params with the counter updated.
+
+    Args:
+      params: The params container.
+      counter: New counter value.
+    """
+    return self.set_param(params, 'counter', jnp.uint32(counter))
+
+  def __call__(self, params: Params) -> tuple[jax.Array, Params]:
+    """Returns (new_key, params) with counter incremented.
+
+    The key and counter are stored as non-trainable params under this
+    module's graph path. Respects params' folded_axes for device-unique keys.
+
+    Args:
+      params: The params container.
+    """
+    base_key, params = self.get_base_key(params)
+    counter, params = self.get_counter(params)
 
     # Fold in any axes from params.folded_axes. This ensures that different
     # devices/batch elements get different keys when using shard_map/vmap.
@@ -890,7 +925,7 @@ class Rng(Module):
 
     # Fold in the counter to obtain a new deterministic key and increment.
     new_key = jax.random.fold_in(folded_key, counter)
-    params = self.set_param(params, 'counter', counter + 1)
+    params = self.set_counter(params, counter + 1)
 
     return new_key, params
 

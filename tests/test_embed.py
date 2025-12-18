@@ -48,7 +48,7 @@ def test_embed_attend_shapes():
   indices = jnp.array([0, 1, 2])
   params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=0))
   _, params = embed(params, indices)
-  params = params.finalize()
+  params = params.finalized()
 
   # Apply attend (transpose projection).
   hidden = jnp.ones((4, 32))
@@ -67,7 +67,7 @@ def test_embed_weight_tying():
   # Initialize by looking up one index.
   indices = jnp.array([0])
   embeddings, params = embed(params, indices)
-  params = params.finalize()
+  params = params.finalized()
 
   # Get the embedding matrix directly.
   embedding_matrix = params._data[('root', 'embed', 'embedding')].value
@@ -93,7 +93,7 @@ def test_embed_learning():
 
   # Initialize.
   _, params = embed(params, indices)
-  params = params.finalize()
+  params = params.finalized()
 
   initial_embeddings, _ = embed(params, indices)
   initial_loss = jnp.mean((initial_embeddings - target) ** 2)
@@ -134,7 +134,7 @@ def test_embed_parameter_path():
   params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=0))
 
   _, params = embed(params, indices)
-  params = params.finalize()
+  params = params.finalized()
 
   assert ('root', 'embed', 'embedding') in params._data
   assert params._data[('root', 'embed', 'embedding')].value.shape == (50, 8)
