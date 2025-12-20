@@ -12,8 +12,8 @@ import jax.numpy as jnp
 def test_fold_in_axes_noop_outside_transformation():
   """fold_in_axes is a no-op outside vmap/shard_map."""
   graph = bx.Graph('root')
-  rng = bx.Rng(graph.child('rng'), seed=42)
-  params = bx.Params(rng=rng)
+  rng = bx.Rng(graph.child('rng'))
+  params = bx.Params(rng, seed=42)
   params_folded = params.fold_in_axes('batch')
 
   assert params_folded is params
@@ -23,10 +23,10 @@ def test_fold_in_axes_noop_outside_transformation():
 def test_fold_in_axes_sets_folded_axes_inside_vmap():
   """fold_in_axes sets folded_axes inside vmap."""
   graph = bx.Graph('root')
-  rng = bx.Rng(graph.child('rng'), seed=42)
+  rng = bx.Rng(graph.child('rng'))
 
   def check_folding(x):
-    p = bx.Params(rng=rng)
+    p = bx.Params(rng, seed=42)
     assert p.folded_axes == ()
 
     p = p.fold_in_axes('batch')
@@ -46,10 +46,10 @@ def test_fold_in_axes_sets_folded_axes_inside_vmap():
 def test_fold_in_axes_idempotent():
   """Folding the same axis twice is a no-op."""
   graph = bx.Graph('root')
-  rng = bx.Rng(graph.child('rng'), seed=42)
+  rng = bx.Rng(graph.child('rng'))
 
   def check_idempotent(x):
-    p = bx.Params(rng=rng).fold_in_axes('batch')
+    p = bx.Params(rng, seed=42).fold_in_axes('batch')
     p2 = p.fold_in_axes('batch')
     return p is p2
 
@@ -60,10 +60,10 @@ def test_fold_in_axes_idempotent():
 def test_fold_in_axes_multiple():
   """fold_in_axes can fold multiple axes at once."""
   graph = bx.Graph('root')
-  rng = bx.Rng(graph.child('rng'), seed=42)
+  rng = bx.Rng(graph.child('rng'))
 
   def check_multi(x):
-    p = bx.Params(rng=rng).fold_in_axes('outer', 'inner')
+    p = bx.Params(rng, seed=42).fold_in_axes('outer', 'inner')
     assert p.folded_axes == ('outer', 'inner')
     key, _ = p.next_key()
     return key
@@ -82,8 +82,8 @@ def test_fold_in_axes_multiple():
 def test_fold_out_axes_noop_outside_transformation():
   """fold_out_axes is a no-op outside vmap/shard_map."""
   graph = bx.Graph('root')
-  rng = bx.Rng(graph.child('rng'), seed=42)
-  params = bx.Params(rng=rng)
+  rng = bx.Rng(graph.child('rng'))
+  params = bx.Params(rng, seed=42)
   params_unfolded = params.fold_out_axes('batch')
 
   assert params_unfolded is params
@@ -92,10 +92,10 @@ def test_fold_out_axes_noop_outside_transformation():
 def test_fold_out_axes_removes_axis():
   """fold_out_axes removes axis from folded_axes."""
   graph = bx.Graph('root')
-  rng = bx.Rng(graph.child('rng'), seed=42)
+  rng = bx.Rng(graph.child('rng'))
 
   def check_unfold(x):
-    p = bx.Params(rng=rng).fold_in_axes('batch')
+    p = bx.Params(rng, seed=42).fold_in_axes('batch')
     assert p.folded_axes == ('batch',)
 
     p = p.fold_out_axes('batch')
@@ -109,10 +109,10 @@ def test_fold_out_axes_removes_axis():
 def test_fold_out_axes_multiple():
   """fold_out_axes can unfold multiple axes at once."""
   graph = bx.Graph('root')
-  rng = bx.Rng(graph.child('rng'), seed=42)
+  rng = bx.Rng(graph.child('rng'))
 
   def check_multi_unfold(x):
-    p = bx.Params(rng=rng).fold_in_axes('outer', 'inner')
+    p = bx.Params(rng, seed=42).fold_in_axes('outer', 'inner')
     assert p.folded_axes == ('outer', 'inner')
 
     # Order doesn't matter as long as they're at the tail.
@@ -130,10 +130,10 @@ def test_fold_out_axes_multiple():
 def test_fold_out_axes_partial():
   """fold_out_axes can unfold only some axes."""
   graph = bx.Graph('root')
-  rng = bx.Rng(graph.child('rng'), seed=42)
+  rng = bx.Rng(graph.child('rng'))
 
   def check_partial(x):
-    p = bx.Params(rng=rng).fold_in_axes('outer', 'inner')
+    p = bx.Params(rng, seed=42).fold_in_axes('outer', 'inner')
     key_both, _ = p.next_key()
 
     # Unfold only inner.
@@ -169,10 +169,10 @@ def test_fold_out_axes_partial():
 def test_fold_in_axes_produces_different_keys():
   """fold_in_axes produces different RNG keys per batch element."""
   graph = bx.Graph('root')
-  rng = bx.Rng(graph.child('rng'), seed=42)
+  rng = bx.Rng(graph.child('rng'))
 
   def get_key(x):
-    params = bx.Params(rng=rng).fold_in_axes('batch')
+    params = bx.Params(rng, seed=42).fold_in_axes('batch')
     key, _ = params.next_key()
     return key
 
@@ -185,10 +185,10 @@ def test_fold_in_axes_produces_different_keys():
 def test_without_fold_in_axes_produces_same_keys():
   """Without fold_in_axes, all batch elements get same RNG keys."""
   graph = bx.Graph('root')
-  rng = bx.Rng(graph.child('rng'), seed=42)
+  rng = bx.Rng(graph.child('rng'))
 
   def get_key(x):
-    params = bx.Params(rng=rng)
+    params = bx.Params(rng, seed=42)
     key, _ = params.next_key()
     return key
 
@@ -206,10 +206,10 @@ def test_without_fold_in_axes_produces_same_keys():
 def test_folded_axes_preserved_after_jit():
   """folded_axes is preserved after pytree round-trip (jit)."""
   graph = bx.Graph('root')
-  rng = bx.Rng(graph.child('rng'), seed=42)
+  rng = bx.Rng(graph.child('rng'))
 
   def check_reconstruction(x):
-    params = bx.Params(rng=rng).fold_in_axes('batch')
+    params = bx.Params(rng, seed=42).fold_in_axes('batch')
     original_key, _ = params.next_key()
 
     @jax.jit
@@ -233,10 +233,10 @@ def test_folded_axes_preserved_after_jit():
 def test_folded_axes_preserved_in_pytree():
   """folded_axes are preserved through pytree operations."""
   graph = bx.Graph('root')
-  rng = bx.Rng(graph.child('rng'), seed=42)
+  rng = bx.Rng(graph.child('rng'))
 
   def check_preserved(x):
-    p = bx.Params(rng=rng).fold_in_axes('batch')
+    p = bx.Params(rng, seed=42).fold_in_axes('batch')
 
     @jax.jit
     def identity(params):
@@ -257,10 +257,10 @@ def test_folded_axes_preserved_in_pytree():
 def test_nested_vmap_fold_in_both_axes():
   """Nested vmap with fold_in_axes produces unique keys at each position."""
   graph = bx.Graph('root')
-  rng = bx.Rng(graph.child('rng'), seed=42)
+  rng = bx.Rng(graph.child('rng'))
 
   def inner(x):
-    p = bx.Params(rng=rng).fold_in_axes('outer', 'inner')
+    p = bx.Params(rng, seed=42).fold_in_axes('outer', 'inner')
     key, _ = p.next_key()
     return key
 
@@ -277,11 +277,11 @@ def test_nested_vmap_fold_in_both_axes():
 def test_fold_outer_then_inner_equals_fold_both_in_inner():
   """Folding outer then inner == folding both in inner function."""
   graph = bx.Graph('root')
-  rng = bx.Rng(graph.child('rng'), seed=42)
+  rng = bx.Rng(graph.child('rng'))
 
   def approach1(x):
     """Fold outer in outer, fold inner in inner."""
-    params_outer = bx.Params(rng=rng).fold_in_axes('outer')
+    params_outer = bx.Params(rng, seed=42).fold_in_axes('outer')
 
     def inner(xi):
       p = params_outer.fold_in_axes('inner')
@@ -294,7 +294,7 @@ def test_fold_outer_then_inner_equals_fold_both_in_inner():
     """Fold both axes in inner function."""
 
     def inner(xi):
-      p = bx.Params(rng=rng).fold_in_axes('outer', 'inner')
+      p = bx.Params(rng, seed=42).fold_in_axes('outer', 'inner')
       key, _ = p.next_key()
       return key
 
@@ -310,10 +310,10 @@ def test_fold_outer_then_inner_equals_fold_both_in_inner():
 def test_nested_vmap_all_positions_unique():
   """Nested vmap with fold_in_axes produces unique keys at each position."""
   graph = bx.Graph('root')
-  rng = bx.Rng(graph.child('rng'), seed=42)
+  rng = bx.Rng(graph.child('rng'))
 
   def inner(x):
-    p = bx.Params(rng=rng).fold_in_axes('outer', 'inner')
+    p = bx.Params(rng, seed=42).fold_in_axes('outer', 'inner')
     key, _ = p.next_key()
     return key
 
@@ -336,10 +336,10 @@ def test_vmap_init_produces_different_params():
   """Integration: vmap model init produces different params per batch."""
   graph = bx.Graph('root')
   linear = bx.Linear(graph.child('linear'), output_size=4)
-  rng = bx.Rng(graph.child('rng'), seed=42)
+  rng = bx.Rng(graph.child('rng'))
 
   def init(x):
-    params = bx.Params(rng=rng).fold_in_axes('batch')
+    params = bx.Params(rng, seed=42).fold_in_axes('batch')
     _, params = linear(params, x)
     return params.finalized()
 
@@ -358,11 +358,11 @@ def test_nested_vmap_mlp_apply():
   layer1 = bx.Linear(graph.child('layer1'), output_size=64)
   dropout = bx.Dropout(graph.child('dropout'), rate=0.5)
   layer2 = bx.Linear(graph.child('layer2'), output_size=32)
-  rng = bx.Rng(graph.child('rng'), seed=0)
+  rng = bx.Rng(graph.child('rng'))
 
   # Initialize params once (outside vmap).
   def init_model(x):
-    params = bx.Params(rng=rng)
+    params = bx.Params(rng, seed=0)
     x, params = layer1(params, x)
     x, params = dropout(params, x, is_training=False)
     _, params = layer2(params, x)
@@ -403,10 +403,10 @@ def test_vmap_dropout_different_masks():
   """Integration: vmap dropout produces different masks per batch element."""
   graph = bx.Graph('root')
   dropout = bx.Dropout(graph.child('dropout'), rate=0.5)
-  rng = bx.Rng(graph.child('rng'), seed=42)
+  rng = bx.Rng(graph.child('rng'))
 
   def apply(x):
-    params = bx.Params(rng=rng).fold_in_axes('batch')
+    params = bx.Params(rng, seed=42).fold_in_axes('batch')
     out, _ = dropout(params, x, is_training=True)
     return out
 

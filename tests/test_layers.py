@@ -12,7 +12,7 @@ def test_linear_shapes():
   # Input has 5 features.
   x = jnp.ones((2, 5))
   # Initialize params with a seed.
-  params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=0))
+  params = bx.Params(bx.Rng(graph.child('rng')), seed=0)
 
   y, params = layer(params, x)
 
@@ -39,7 +39,7 @@ def test_linear_learning():
   y_target = jnp.array([[5.0]])
 
   # Initialize params with a seed.
-  params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=42))
+  params = bx.Params(bx.Rng(graph.child('rng')), seed=42)
 
   # Initialize.
   _, params = layer(params, x)
@@ -109,7 +109,7 @@ def test_sequential_chaining():
   )
 
   x = jnp.ones((2, 20))  # Batch=2, Features=20
-  params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=0))
+  params = bx.Params(bx.Rng(graph.child('rng')), seed=0)
 
   y, params = model(params, x)
 
@@ -122,7 +122,7 @@ def test_sequential_empty():
   model = bx.Sequential(graph.child('seq'), [])
 
   x = jnp.ones((2, 5))
-  params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=0))
+  params = bx.Params(bx.Rng(graph.child('rng')), seed=0)
 
   y, _ = model(params, x)
   assert jnp.allclose(y, x)
@@ -137,7 +137,7 @@ def test_sequential_nested():
   outer = bx.Sequential(graph.child('outer'), [inner, jax.nn.relu])
 
   x = jnp.ones((2, 10))
-  params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=0))
+  params = bx.Params(bx.Rng(graph.child('rng')), seed=0)
 
   y, params = outer(params, x)
   assert y.shape == (2, 5)
@@ -149,7 +149,7 @@ def test_sequential_lambda():
   model = bx.Sequential(graph.child('seq'), [lambda x: x * 2])
 
   x = jnp.ones((2, 5))
-  params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=0))
+  params = bx.Params(bx.Rng(graph.child('rng')), seed=0)
 
   y, _ = model(params, x)
   assert jnp.allclose(y, x * 2)

@@ -15,13 +15,14 @@ def test_rng_updates_during_training():
   y = jnp.ones((1, 1))
 
   # Create params with an Rng.
-  params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=42))
+  params = bx.Params(bx.Rng(graph.child('rng')), seed=42)
 
   # RNG counter path is under the Rng module's graph path.
   counter_path = ('root', 'rng', 'counter')
 
-  # Counter is not created until first next_key() call.
-  assert counter_path not in params._data
+  # Counter is created at Params initialization, starting at 0.
+  assert counter_path in params._data
+  assert params._data[counter_path].value == 0
 
   # Run the initialization pass to create weights (and RNG state).
   _, params = model(params, x)
@@ -140,7 +141,7 @@ def test_checkpoint_produces_correct_gradients():
   y = jnp.ones((4, 8))
 
   # Initialize params by running forward.
-  params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=42))
+  params = bx.Params(bx.Rng(graph.child('rng')), seed=42)
   _, params = forward(params, x)
   params = params.finalized()
 
@@ -209,7 +210,7 @@ def test_checkpoint_with_dropout():
   y = jnp.ones((4, 8))
 
   # Initialize params by running forward.
-  params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=42))
+  params = bx.Params(bx.Rng(graph.child('rng')), seed=42)
   _, params = forward(params, x)
   params = params.finalized()
 
@@ -248,63 +249,63 @@ def test_checkpoint_with_dropout():
   )
 
 
-def test_rng_get_set_base_key():
-  """Verifies get_base_key and set_base_key methods on Rng."""
+def test_rng_get_set_seed():
+  """Verifies get_seed and seed methods on Rng."""
   graph = bx.Graph('root')
-  rng = bx.Rng(graph.child('rng'), seed=42)
-  params = bx.Params(rng=rng)
+  rng = bx.Rng(graph.child('rng'))
+  params = bx.Params(rng, seed=42)
 
-  # get_base_key creates the key param if needed.
-  key1, params = rng.get_base_key(params)
+  # get_seed returns the seed key.
+  key1 = rng.get_seed(params)
   assert key1 is not None
 
-  # get_base_key returns the same key on subsequent calls.
-  key2, params = rng.get_base_key(params)
+  # get_seed returns the same key on subsequent calls.
+  key2 = rng.get_seed(params)
   assert jnp.array_equal(key1, key2)
 
-  # set_base_key returns params with updated key.
+  # seed() with seed= returns params with updated key.
   new_key = jax.random.key(999)
-  new_params = rng.set_base_key(params, new_key)
+  new_params = rng.seed(params, seed=new_key)
 
-  key3, _ = rng.get_base_key(new_params)
+  key3 = rng.get_seed(new_params)
   assert jnp.array_equal(key3, new_key)
   assert not jnp.array_equal(key3, key1)
 
   # Original params unchanged.
-  key_orig, _ = rng.get_base_key(params)
+  key_orig = rng.get_seed(params)
   assert jnp.array_equal(key_orig, key1)
 
 
 def test_rng_get_set_counter():
-  """Verifies get_counter and set_counter methods on Rng."""
+  """Verifies get_counter and seed(counter=) methods on Rng."""
   graph = bx.Graph('root')
-  rng = bx.Rng(graph.child('rng'), seed=42)
-  params = bx.Params(rng=rng)
+  rng = bx.Rng(graph.child('rng'))
+  params = bx.Params(rng, seed=42)
 
-  # get_counter creates the counter param if needed (starts at 0).
-  counter1, params = rng.get_counter(params)
+  # get_counter returns counter value (starts at 0).
+  counter1 = rng.get_counter(params)
   assert counter1 == 0
 
   # Calling next_key increments the counter.
   _, params = params.next_key()
-  counter2, _ = rng.get_counter(params)
+  counter2 = rng.get_counter(params)
   assert counter2 == 1
 
-  # set_counter returns params with updated counter.
-  new_params = rng.set_counter(params, 100)
-  counter3, _ = rng.get_counter(new_params)
+  # seed(counter=) returns params with updated counter.
+  new_params = rng.seed(params, counter=100)
+  counter3 = rng.get_counter(new_params)
   assert counter3 == 100
 
   # Original params unchanged.
-  counter_orig, _ = rng.get_counter(params)
+  counter_orig = rng.get_counter(params)
   assert counter_orig == 1
 
 
 def test_rng_reseed_pattern():
-  """Verifies the reseed pattern using set_base_key and set_counter."""
+  """Verifies the reseed pattern using seed()."""
   graph = bx.Graph('root')
-  rng = bx.Rng(graph.child('rng'), seed=42)
-  params = bx.Params(rng=rng)
+  rng = bx.Rng(graph.child('rng'))
+  params = bx.Params(rng, seed=42)
 
   # Initialize and consume some keys.
   _, params = params.next_key()
@@ -312,16 +313,102 @@ def test_rng_reseed_pattern():
   _, params = params.next_key()
   params = params.finalized()
 
-  counter_before, _ = rng.get_counter(params)
+  counter_before = rng.get_counter(params)
   assert counter_before == 3
 
-  # Reseed: set new key and reset counter.
+  # Reseed: set new key and reset counter in one call.
   new_key = jax.random.key(999)
-  reseeded = rng.set_base_key(params, new_key)
-  reseeded = rng.set_counter(reseeded, 0)
+  reseeded = rng.seed(params, seed=new_key, counter=0)
 
-  counter_after, _ = rng.get_counter(reseeded)
+  counter_after = rng.get_counter(reseeded)
   assert counter_after == 0
 
-  key_after, _ = rng.get_base_key(reseeded)
+  key_after = rng.get_seed(reseeded)
   assert jnp.array_equal(key_after, new_key)
+
+
+def test_next_key_fold_axes_parameter():
+  """Verifies next_key(fold_axes=False) skips axis folding."""
+  graph = bx.Graph('root')
+  rng = bx.Rng(graph.child('rng'))
+
+  def check_fold_axes(x):
+    # With fold_axes=True (default), keys differ per batch element.
+    params_folded = bx.Params(rng, seed=42).fold_in_axes('batch')
+    key_folded, _ = params_folded.next_key()
+
+    # With fold_axes=False, keys are the same across batch elements.
+    params_unfolded = bx.Params(rng, seed=42).fold_in_axes('batch')
+    key_unfolded, _ = params_unfolded.next_key(fold_axes=False)
+
+    return key_folded, key_unfolded
+
+  keys_folded, keys_unfolded = jax.vmap(check_fold_axes, axis_name='batch')(
+      jnp.ones((4, 1))
+  )
+
+  # Folded keys should differ across batch elements.
+  assert not jnp.array_equal(keys_folded[0], keys_folded[1])
+
+  # Unfolded keys should be identical across batch elements.
+  assert jnp.array_equal(keys_unfolded[0], keys_unfolded[1])
+
+
+def test_get_seed_fold_in_parameter():
+  """Verifies get_seed(fold_in=...) folds the seed."""
+  graph = bx.Graph('root')
+  rng = bx.Rng(graph.child('rng'))
+  params = bx.Params(rng, seed=42)
+
+  # Without fold_in, get base seed.
+  base_seed = rng.get_seed(params)
+
+  # With fold_in (int), get folded seed.
+  folded_seed_1 = rng.get_seed(params, fold_in=1)
+  folded_seed_2 = rng.get_seed(params, fold_in=2)
+
+  # With fold_in (jax.Array), get folded seed.
+  folded_seed_arr = rng.get_seed(params, fold_in=jnp.array(1))
+
+  # Base seed and folded seeds should all be different.
+  assert not jnp.array_equal(base_seed, folded_seed_1)
+  assert not jnp.array_equal(base_seed, folded_seed_2)
+  assert not jnp.array_equal(folded_seed_1, folded_seed_2)
+
+  # Same fold_in value gives same result (int vs array).
+  assert jnp.array_equal(folded_seed_1, folded_seed_arr)
+
+
+def test_module_param_path():
+  """Verifies Module.param_path() returns correct paths."""
+  graph = bx.Graph('root')
+  linear = bx.Linear(graph.child('encoder').child('layer'), output_size=4)
+
+  # param_path returns the full tuple path for a parameter name.
+  kernel_path = linear.param_path('kernel')
+  bias_path = linear.param_path('bias')
+
+  assert kernel_path == ('root', 'encoder', 'layer', 'kernel')
+  assert bias_path == ('root', 'encoder', 'layer', 'bias')
+
+
+def test_params_len_and_contains():
+  """Verifies Params.__len__ and __contains__ work correctly."""
+  graph = bx.Graph('root')
+  linear = bx.Linear(graph.child('linear'), output_size=4)
+  rng = bx.Rng(graph.child('rng'))
+
+  x = jnp.ones((2, 3))
+  params = bx.Params(rng, seed=42)
+  _, params = linear(params, x)
+  params = params.finalized()
+
+  # __len__ returns number of parameters.
+  assert len(params) == 4  # kernel, bias, seed, counter
+
+  # __contains__ checks for path existence.
+  assert ('root', 'linear', 'kernel') in params
+  assert ('root', 'linear', 'bias') in params
+  assert ('root', 'rng', 'seed') in params
+  assert ('root', 'rng', 'counter') in params
+  assert ('root', 'nonexistent') not in params

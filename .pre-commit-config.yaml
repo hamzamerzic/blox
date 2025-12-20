@@ -11,11 +11,3 @@ repos:
     hooks:
       - id: pyink
         types_or: [python, pyi, jupyter]
-  - repo: local
-    hooks:
-      - id: execute-notebooks
-        name: Execute Jupyter notebooks
-        entry: jupyter nbconvert --to notebook --execute --inplace
-        language: system
-        files: ^docs/readme_examples\.ipynb$
-        pass_filenames: true

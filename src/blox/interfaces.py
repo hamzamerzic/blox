@@ -229,14 +229,14 @@ class Params:
 
   Example:
     graph = bx.Graph('net')
-    rng = bx.Rng(graph.child('rng'), seed=42)
-    params = bx.Params(rng=rng)
+    rng = bx.Rng(graph.child('rng'))
+    params = bx.Params(rng, seed=42)
 
-    # Forward pass creates parameters
+    # Forward pass creates parameters.
     _, params = model(params, x)
     params = params.finalized()
 
-    # Training loop
+    # Training loop.
     trainable, non_trainable = params.split()
     grads = jax.grad(loss_fn)(trainable, non_trainable, x)
     trainable = jax.tree.map(lambda w, g: w - lr * g, trainable, grads)
@@ -247,17 +247,25 @@ class Params:
   # Initialization
   # ============================================================================
 
-  def __init__(self, *, rng: 'Rng') -> None:
+  def __init__(
+      self, rng: 'Rng', *, seed: int | jax.Array, counter: int = 0
+  ) -> None:
     """Creates a new parameter container.
 
     Args:
-      rng: An Rng module for random number generation. Required for parameter
-        initialization that needs random keys.
+      rng: An Rng module for random number generation.
+      seed: Seed for the Rng (int or JAX key).
+      counter: Initial counter value for the Rng. Defaults to 0.
     """
     self._data: dict[Path, Param] = {}
     self._initialized: bool = False
     self._folded_axes: tuple[str, ...] = ()
     self._rng: 'Rng' = rng
+
+    # Initialize rng params using rng.seed(). It returns a new instance with
+    # the seed/counter params, so we extract its _data.
+    initialized = rng.seed(self, seed=seed, counter=counter)
+    self._data = initialized._data
 
   # ============================================================================
   # Properties
@@ -270,23 +278,35 @@ class Params:
 
   @property
   def folded_axes(self) -> tuple[str, ...]:
-    """Axes currently folded in for device-unique RNG keys."""
+    """Axes currently folded in for device-unique RNG keys.
+
+    Set via fold_in_axes() at the start of shard_map/vmap, and cleared via
+    fold_out_axes() before returning. See those methods for usage examples.
+    """
     return self._folded_axes
 
   # ============================================================================
   # Core API
   # ============================================================================
 
-  def next_key(self) -> tuple[jax.Array, 'Params']:
+  def next_key(self, *, fold_axes: bool = True) -> tuple[jax.Array, 'Params']:
     """Generates a new random key.
 
     Delegates to the internal Rng module, which handles counter-based key
-    generation and respects folded axes for device-unique randomness.
+    generation.
+
+    Args:
+      fold_axes: If True (default), folds in the indices from self.folded_axes
+        for device-unique keys in shard_map/vmap. If False, returns the same
+        key across all devices (useful for seeds that should be replicated).
 
     Returns:
       A tuple of (random_key, updated_params).
     """
-    return self._rng(self)
+    fold_in = None
+    if fold_axes and self.folded_axes:
+      fold_in = jax.lax.axis_index(self.folded_axes)
+    return self._rng(self, fold_in=fold_in)
 
   def finalized(self) -> 'Params':
     """Returns finalized params that prevent new parameter creation.
@@ -319,7 +339,7 @@ class Params:
       Tuple of (matching_params, non_matching_params).
     """
 
-    def default_predicate(_path: Path, p: Param) -> bool:
+    def default_predicate(_: Path, p: Param) -> bool:
       return p.trainable
 
     if predicate is None:
@@ -341,7 +361,7 @@ class Params:
     """Combines this container with another.
 
     Parameters from `other` override those in `self` if paths conflict.
-    Both containers must have the same initialized and folded_axes state.
+    Both containers must have the same initialized, folded_axes, and rng.
 
     Args:
       other: Another Params container to merge in.
@@ -350,8 +370,12 @@ class Params:
       A new merged Params container.
 
     Raises:
-      ValueError: If initialized or folded_axes state doesn't match.
+      ValueError: If initialized, folded_axes, or rng doesn't match.
     """
+    if self._rng is not other._rng:
+      raise ValueError(
+          f'Rng mismatch: {self._rng.graph.path} vs {other._rng.graph.path}.'
+      )
     if self.initialized != other.initialized:
       raise ValueError(
           f'Initialized mismatch: {self.initialized} vs {other.initialized}.'
@@ -396,6 +420,14 @@ class Params:
   def items(self) -> ItemsView[Path, Param]:
     """Returns (path, Param) pairs."""
     return self._data.items()
+
+  def __len__(self) -> int:
+    """Returns the number of parameters."""
+    return len(self._data)
+
+  def __contains__(self, key: Path) -> bool:
+    """Returns True if the path exists in params."""
+    return key in self._data
 
   # ============================================================================
   # Sharding / Device Parallelism
@@ -506,8 +538,7 @@ class Params:
 
   def _get(
       self,
-      graph: Graph,
-      name: str,
+      path: Path,
       shape: Shape,
       init: Initializer,
       dtype: jnp.dtype = jnp.float32,
@@ -515,15 +546,13 @@ class Params:
       metadata: dict[str, Any] | None = None,
   ) -> tuple[jax.Array, 'Params']:
     """Retrieves or creates a parameter. Use Module.get_param instead."""
-    full_path = graph.path + (name,)
-
     # Return existing parameter.
-    if full_path in self._data:
-      return self._data[full_path].value, self
+    if path in self._data:
+      return self._data[path].value, self
 
     # Reject new params after finalization.
     if self._initialized:
-      raise KeyError(f"Parameter '{full_path}' missing (params finalized).")
+      raise KeyError(f"Parameter '{path}' missing (params finalized).")
 
     # Try using a constant initializer (key=None), fall back to RNG.
     # Any real bugs will surface when calling init() with a proper key below, so
@@ -536,7 +565,7 @@ class Params:
       key, new_p = self.next_key()
       val = init(key, shape, dtype)
 
-    new_p._data[full_path] = Param(val, trainable=trainable, metadata=metadata)
+    new_p._data[path] = Param(val, trainable=trainable, metadata=metadata)
     return val, new_p
 
   def _set(self, path: Path, value: Any) -> 'Params':
@@ -564,6 +593,8 @@ class Params:
   def __repr__(self) -> str:
     abstract_data = jax.eval_shape(lambda x: x, self._data)
     status = 'initialized' if self._initialized else 'uninitialized'
+    if self._folded_axes:
+      status += f', folded_axes={self._folded_axes}'
     lines = [f'Params[{status}]({{']
     for k, v in abstract_data.items():
       lines.append(f'  {k}: {v},')
@@ -759,7 +790,7 @@ class Module:
       )
     """
     return params._get(
-        self.graph, name, shape, init, dtype, trainable, metadata
+        self.param_path(name), shape, init, dtype, trainable, metadata
     )
 
   def set_param(self, params: Params, name: str, value: Any) -> Params:
@@ -773,7 +804,23 @@ class Module:
     Returns:
       Updated Params container.
     """
-    return params._set(self.graph.path + (name,), value)
+    return params._set(self.param_path(name), value)
+
+  def param_path(self, name: str) -> Path:
+    """Returns the full path for a parameter in this module's namespace.
+
+    Args:
+      name: Local parameter name.
+
+    Returns:
+      Full tuple path like ('net', 'linear', 'kernel').
+
+    Example:
+      # Check if a param exists.
+      if module.param_path('kernel') in params:
+        kernel, params = module.get_param(...)
+    """
+    return self.graph.path + (name,)
 
   # ============================================================================
   # Special Methods
@@ -809,123 +856,193 @@ class Module:
 class Rng(Module):
   """A random number generator stream stored as non-trainable params.
 
-  Produces deterministic, counter-based random keys. Reads folded_axes
-  from Params (via public property) for device-unique randomness in vmap/shard_map.
+  Produces deterministic, counter-based random keys. The seed is defined in
+  Params, not the Rng, as this allows the same Rng module to be used with
+  different seeds without changing the model or the pytree structure.
 
-  Uses get_param like any other module - no internal state access.
+  Seeds defined as int are converted and stored as a JAX key array.
 
   Example:
-    # Create Params with an Rng
-    graph = bx.Graph('root')
-    params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=42))
+    # Structure (static, reusable).
+    graph = bx.Graph('net')
+    rng = bx.Rng(graph.child('rng'))
+    model = CNN(graph.child('model'))
 
-    # Get a key
-    key, params = params.next_key()
+    # Create params with seed. Same structure, different seeds.
+    params1 = bx.Params(rng=rng, seed=42)
+    params2 = bx.Params(rng=rng, seed=43)
 
-    # Module-owned RNG for Dropout
-    class MyModel(bx.Module):
-      def __init__(self, graph):
-        super().__init__(graph)
-        self.dropout_rng = bx.Rng(graph.child('dropout_rng'), seed=0)
-        self.dropout = bx.Dropout(
-          graph.child('dropout'), rate=0.5, rng=self.dropout_rng
-        )
+    # Or pass a JAX key directly.
+    key = jax.random.key(42)
+    params3 = bx.Params(rng=rng, seed=key)
 
-      def __call__(self, params, x, is_training=True):
-        x, params = self.dropout(params, x, is_training)
-        return x, params
+  Additional Rngs (e.g., for dropout) auto-initialize on first use by
+  deriving a unique key from the main Rng via params.next_key():
+
+    dropout_rng = bx.Rng(graph.child('dropout'))
+    # First call to dropout_rng auto-seeds from params.next_key().
+
+  Or explicitly seed before first use:
+
+    params = dropout_rng.seed(params, seed=0)
   """
 
-  def __init__(self, graph: Graph, seed: int | jax.Array) -> None:
+  def __init__(self, graph: Graph) -> None:
     """Initializes the Rng module.
 
     Args:
       graph: The graph node for this module's scope.
-      seed: Integer seed or JAX key array.
     """
     super().__init__(graph)
-    # Store initial key value (will be initialized via get_param on first call).
-    if isinstance(seed, int):
-      self._init_key = jax.random.key(seed)
+
+  def get_seed(
+      self, params: Params, *, fold_in: int | jax.Array | None = None
+  ) -> jax.Array:
+    """Returns the seed key, optionally folded.
+
+    The seed is stored internally as a JAX key array.
+
+    Args:
+      params: The params container.
+      fold_in: Value to fold into the key. Use this to get unique keys on
+        different devices in vmap/shard_map.
+
+    Raises:
+      KeyError: If this Rng is not initialized.
+    """
+    path = self.param_path('seed')
+    if path not in params:
+      raise KeyError(
+          f"Rng '{self.graph.path}' not initialized. "
+          'Use Params(rng=..., seed=...) or rng.seed(params, seed=...).'
+      )
+    key = params[path].value
+    if fold_in is not None:
+      key = jax.random.fold_in(key, fold_in)
+    return key
+
+  def get_counter(self, params: Params) -> jax.Array:
+    """Returns the counter value.
+
+    Args:
+      params: The params container.
+
+    Raises:
+      KeyError: If this Rng is not initialized.
+    """
+    path = self.param_path('counter')
+    if path not in params:
+      raise KeyError(
+          f"Rng '{self.graph.path}' not initialized. "
+          'Use Params(rng=..., seed=...) or rng.seed(params, seed=...).'
+      )
+    return params[path].value
+
+  def seed(
+      self,
+      params: Params,
+      *,
+      seed: int | jax.Array | None = None,
+      counter: int | jax.Array | None = None,
+  ) -> Params:
+    """Sets the seed and/or counter for this Rng.
+
+    If this Rng is not yet initialized, creates the params with the given
+    seed (required) and counter (defaults to 0). If already initialized,
+    updates the specified values.
+
+    Args:
+      params: The params container.
+      seed: Seed value (int or JAX key). Required if not initialized.
+      counter: Counter value. Defaults to 0 if initializing, unchanged
+        if updating.
+
+    Returns:
+      Updated params.
+
+    Raises:
+      ValueError: If not initialized and seed is None, or if initialized
+        and both seed and counter are None.
+    """
+    is_init = self.param_path('seed') not in params
+
+    if is_init:
+      # Initializing: seed is required, counter defaults to 0.
+      if seed is None:
+        raise ValueError(
+            f"Rng '{self.graph.path}' not initialized. Seed is required."
+        )
+      if counter is None:
+        counter = 0
     else:
-      self._init_key = seed
+      # Updating: at least one must be provided.
+      if seed is None and counter is None:
+        raise ValueError('At least one of seed or counter must be provided.')
 
-  def get_base_key(self, params: Params) -> tuple[jax.Array, Params]:
-    """Returns (base_key, params), creating the param if needed.
+    if seed is not None:
+      key = jax.random.key(seed) if isinstance(seed, int) else seed
+      if is_init:
+        key_init = jax.nn.initializers.constant(key, key.dtype)
+        _, params = self.get_param(
+            params,
+            'seed',
+            key.shape,
+            key_init,
+            key.dtype,
+            trainable=False,
+            metadata={'tag': 'rng_seed'},
+        )
+      else:
+        params = self.set_param(params, 'seed', key)
 
-    Args:
-      params: The params container.
-    """
-    key_init = jax.nn.initializers.constant(
-        self._init_key, self._init_key.dtype
-    )
-    return self.get_param(
-        params=params,
-        name='base_key',
-        shape=self._init_key.shape,
-        init=key_init,
-        dtype=self._init_key.dtype,
-        trainable=False,
-        metadata={'tag': 'rng_base_key'},
-    )
+    if counter is not None:
+      counter_val = jnp.uint32(counter)
+      if is_init:
+        counter_init = jax.nn.initializers.constant(
+            counter_val, counter_val.dtype
+        )
+        _, params = self.get_param(
+            params,
+            'counter',
+            counter_val.shape,
+            counter_init,
+            counter_val.dtype,
+            trainable=False,
+            metadata={'tag': 'rng_counter'},
+        )
+      else:
+        params = self.set_param(params, 'counter', counter_val)
 
-  def get_counter(self, params: Params) -> tuple[jax.Array, Params]:
-    """Returns (counter, params), creating the param if needed.
+    return params
 
-    Args:
-      params: The params container.
-    """
-    counter_init = jax.nn.initializers.constant(0, dtype=jnp.uint32)
-    return self.get_param(
-        params=params,
-        name='counter',
-        shape=(),
-        init=counter_init,
-        dtype=jnp.uint32,
-        trainable=False,
-        metadata={'tag': 'rng_counter'},
-    )
-
-  def set_base_key(self, params: Params, key: jax.Array) -> Params:
-    """Returns params with the base key updated.
-
-    Args:
-      params: The params container.
-      key: New key value.
-    """
-    return self.set_param(params, 'base_key', key)
-
-  def set_counter(self, params: Params, counter: int | jax.Array) -> Params:
-    """Returns params with the counter updated.
-
-    Args:
-      params: The params container.
-      counter: New counter value.
-    """
-    return self.set_param(params, 'counter', jnp.uint32(counter))
-
-  def __call__(self, params: Params) -> tuple[jax.Array, Params]:
+  def __call__(
+      self, params: Params, *, fold_in: jax.Array | None = None
+  ) -> tuple[jax.Array, Params]:
     """Returns (new_key, params) with counter incremented.
 
-    The key and counter are stored as non-trainable params under this
-    module's graph path. Respects params' folded_axes for device-unique keys.
+    If this Rng is not yet initialized, auto-initializes by deriving a
+    unique seed from the main Rng. This allows secondary Rngs (e.g., for
+    dropout) to work without explicit seeding.
 
     Args:
       params: The params container.
-    """
-    base_key, params = self.get_base_key(params)
-    counter, params = self.get_counter(params)
+      fold_in: Value to fold into the key. Example usage is to get unique keys
+        on different devices in vmap/shard_map.
 
-    # Fold in any axes from params.folded_axes. This ensures that different
-    # devices/batch elements get different keys when using shard_map/vmap.
-    folded_key = base_key
-    if params.folded_axes:
-      axis_idx = jax.lax.axis_index(params.folded_axes)
-      folded_key = jax.random.fold_in(folded_key, axis_idx)
+    Returns:
+      Tuple of (random_key, updated_params).
+    """
+    # Auto-initialize with a replicated key (not folded).
+    if self.param_path('seed') not in params:
+      key, params = params.next_key(fold_axes=False)
+      params = self.seed(params, seed=key)
+
+    seed_key = self.get_seed(params, fold_in=fold_in)
+    counter = self.get_counter(params)
 
     # Fold in the counter to obtain a new deterministic key and increment.
-    new_key = jax.random.fold_in(folded_key, counter)
-    params = self.set_counter(params, counter + 1)
+    new_key = jax.random.fold_in(seed_key, counter)
+    params = self.seed(params, counter=counter + 1)
 
     return new_key, params
 

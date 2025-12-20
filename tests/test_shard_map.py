@@ -64,7 +64,7 @@ def test_sharded_linear_model_parallel():
 
   # Initialize on host.
   x_sample = jnp.ones((1, 8))
-  params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=42))
+  params = bx.Params(bx.Rng(graph.child('rng')), seed=42)
   _, params = linear(params, x_sample)
   params = params.finalized()
 
@@ -107,7 +107,7 @@ def test_sharded_linear_data_parallel():
 
   # Initialize on host.
   x_sample = jnp.ones((1, 3))
-  params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=42))
+  params = bx.Params(bx.Rng(graph.child('rng')), seed=42)
   _, params = linear(params, x_sample)
   params = params.finalized()
 
@@ -164,7 +164,7 @@ def test_sharded_mlp_tensor_parallel():
 
   # Initialize on host.
   x_sample = jnp.ones((1, 8))
-  params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=42))
+  params = bx.Params(bx.Rng(graph.child('rng')), seed=42)
   _, params = mlp(params, x_sample)
   params = params.finalized()
 
@@ -221,11 +221,11 @@ def test_init_with_fold_in_axes_produces_different_params():
       bias_metadata={'sharding': ('model',)},
   )
   # Create Rng outside init_model so it can be reused.
-  rng = bx.Rng(graph.child('rng'), seed=42)
+  rng = bx.Rng(graph.child('rng'))
 
   # Same init function works for eval_shape AND shard_map!
   def init_model(x):
-    params = bx.Params(rng=rng).fold_in_axes('model')
+    params = bx.Params(rng, seed=42).fold_in_axes('model')
     _, params = linear(params, x)
     # fold_out_axes to match pytree metadata with eval_shape.
     return params.fold_out_axes('model').finalized()
@@ -295,12 +295,12 @@ def test_init_without_fold_in_axes_produces_same_params():
       bias_metadata={'sharding': ('model',)},
   )
   # Create Rng outside init_model so it can be reused.
-  rng = bx.Rng(graph.child('rng'), seed=42)
+  rng = bx.Rng(graph.child('rng'))
 
   # Same init function for eval_shape and shard_map.
   def init_model(x):
     # No fold_in_axes = all devices use same RNG sequence.
-    params = bx.Params(rng=rng)
+    params = bx.Params(rng, seed=42)
     _, params = linear(params, x)
     return params.finalized()
 
@@ -367,7 +367,7 @@ def test_layernorm_cross_device():
       axis=0,
   )  # Shape (8, 4)
 
-  params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=0))
+  params = bx.Params(bx.Rng(graph.child('rng')), seed=0)
 
   @jax.jit
   @jax.shard_map(
@@ -408,7 +408,7 @@ def test_dropout_with_fold_in_axes_different_masks():
   )
   def apply_dropout_with_fold_in(x):
     # fold_in_axes causes device-unique RNG.
-    params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=42)).fold_in_axes(
+    params = bx.Params(bx.Rng(graph.child('rng')), seed=42).fold_in_axes(
         'batch'
     )
     out, _ = dropout(params, x, is_training=True)
@@ -440,7 +440,7 @@ def test_dropout_without_fold_in_axes_same_masks():
   )
   def apply_dropout_no_fold(x):
     # No fold_in_axes = same RNG on all devices.
-    params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=42))
+    params = bx.Params(bx.Rng(graph.child('rng')), seed=42)
     out, _ = dropout(params, x, is_training=True)
     return out
 

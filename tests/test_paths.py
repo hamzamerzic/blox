@@ -12,7 +12,7 @@ def test_slash_in_module_name():
   layer = bx.Linear(graph.child('encoder/decoder'), output_size=10)
 
   x = jnp.ones((2, 5))
-  params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=0))
+  params = bx.Params(bx.Rng(graph.child('rng')), seed=0)
 
   y, params = layer(params, x)
   params = params.finalized()
@@ -42,7 +42,7 @@ def test_slash_in_variable_name():
   layer = CustomModule(graph.child('custom'))
 
   x = jnp.ones((2, 5))
-  params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=0))
+  params = bx.Params(bx.Rng(graph.child('rng')), seed=0)
 
   _, params = layer(params, x)
   params = params.finalized()
@@ -66,7 +66,7 @@ def test_special_characters_in_names():
   ]
 
   x = jnp.ones((2, 5))
-  params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=0))
+  params = bx.Params(bx.Rng(graph.child('rng')), seed=0)
 
   for name in special_names:
     layer = bx.Linear(graph.child(name), output_size=3)
@@ -87,7 +87,7 @@ def test_nested_slashes():
   layer = bx.Linear(child2.child('proj/out'), output_size=5)
 
   x = jnp.ones((2, 3))
-  params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=0))
+  params = bx.Params(bx.Rng(graph.child('rng')), seed=0)
 
   _, params = layer(params, x)
   params = params.finalized()
@@ -109,7 +109,7 @@ def test_split_with_special_characters():
   layer = bx.Linear(graph.child('layer/1'), output_size=3)
 
   x = jnp.ones((2, 5))
-  params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=0))
+  params = bx.Params(bx.Rng(graph.child('rng')), seed=0)
 
   _, params = layer(params, x)
   params = params.finalized()
@@ -122,7 +122,7 @@ def test_split_with_special_characters():
   assert ('root', 'layer/1', 'bias') in trainable._data
 
   # Non-trainable should have RNG (stored under Rng module's graph path).
-  assert ('root', 'rng', 'base_key') in non_trainable._data
+  assert ('root', 'rng', 'seed') in non_trainable._data
   assert ('root', 'rng', 'counter') in non_trainable._data
 
 
@@ -142,7 +142,7 @@ def test_custom_split():
   layer = bx.Linear(graph.child('layer/1'), output_size=3)
 
   x = jnp.ones((2, 5))
-  params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=0))
+  params = bx.Params(bx.Rng(graph.child('rng')), seed=0)
   _, params = layer(params, x)
   params = params.finalized()
 
@@ -152,5 +152,5 @@ def test_custom_split():
   assert ('model/v1', 'layer/1', 'kernel') in kernel._data
 
   assert ('model/v1', 'layer/1', 'bias') in rest._data
-  assert ('model/v1', 'rng', 'base_key') in rest._data
+  assert ('model/v1', 'rng', 'seed') in rest._data
   assert ('model/v1', 'rng', 'counter') in rest._data

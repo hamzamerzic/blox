@@ -10,7 +10,7 @@ def test_gru_sequence_shapes():
 
   # Batch=2, Time=5, Dim=4
   inputs = jnp.ones((2, 5, 4))
-  params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=0))
+  params = bx.Params(bx.Rng(graph.child('rng')), seed=0)
 
   # Explicitly initialize state.
   state, params = gru.initial_state(params, inputs)
@@ -31,7 +31,7 @@ def test_gru_reset_logic():
 
   # Batch=1, Time=3
   inputs = jnp.ones((1, 3, 2))
-  params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=0))
+  params = bx.Params(bx.Rng(graph.child('rng')), seed=0)
 
   # Initialization pass
   initial_state, params = gru.initial_state(params, inputs)
@@ -57,7 +57,7 @@ def test_gru_static_vs_dynamic():
   gru = bx.GRU(graph.child('gru'), hidden_size=5, is_static=False)
 
   inputs = jnp.ones((2, 10, 4))
-  params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=42))
+  params = bx.Params(bx.Rng(graph.child('rng')), seed=42)
 
   # Initialization
   state, params = gru.initial_state(params, inputs)
@@ -82,7 +82,7 @@ def test_lstm_sequence_shapes():
 
   # Batch=2, Time=5, Dim=4
   inputs = jnp.ones((2, 5, 4))
-  params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=0))
+  params = bx.Params(bx.Rng(graph.child('rng')), seed=0)
 
   # Explicitly initialize state.
   state, params = lstm.initial_state(params, inputs)
@@ -102,7 +102,7 @@ def test_lstm_call_signature():
   lstm = bx.LSTM(graph.child('lstm'), hidden_size=10)
 
   inputs = jnp.ones((2, 4))
-  params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=0))
+  params = bx.Params(bx.Rng(graph.child('rng')), seed=0)
 
   # Initialize state manually.
   state, params = lstm.initial_state(params, inputs)
@@ -125,7 +125,7 @@ def test_lstm_call_raises_on_none_state():
   graph = bx.Graph('root')
   lstm = bx.LSTM(graph.child('lstm'), hidden_size=10)
   inputs = jnp.ones((1, 4))
-  params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=0))
+  params = bx.Params(bx.Rng(graph.child('rng')), seed=0)
 
   with pytest.raises(
       ValueError, match='The LSTM __call__ method requires a valid prev_state.'
@@ -140,7 +140,7 @@ def test_lstm_static_vs_dynamic():
   lstm = bx.LSTM(graph.child('rnn'), hidden_size=5, is_static=False)
 
   inputs = jnp.ones((2, 10, 4))
-  params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=42))
+  params = bx.Params(bx.Rng(graph.child('rng')), seed=42)
 
   # Initialization pass using apply().
   state, params = lstm.initial_state(params, inputs)
@@ -165,7 +165,7 @@ def test_lstm_reset_logic():
 
   # Batch=1, Time=3
   inputs = jnp.ones((1, 3, 2))
-  params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=0))
+  params = bx.Params(bx.Rng(graph.child('rng')), seed=0)
 
   # Initialization pass using apply().
   initial_state, params = lstm.initial_state(params, inputs)

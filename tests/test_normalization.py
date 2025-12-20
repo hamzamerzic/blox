@@ -8,7 +8,7 @@ def test_layernorm_shapes():
   ln = bx.LayerNorm(graph.child('ln'))
 
   x = jnp.ones((2, 10, 32))
-  params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=0))
+  params = bx.Params(bx.Rng(graph.child('rng')), seed=0)
 
   y, params = ln(params, x)
 
@@ -22,7 +22,7 @@ def test_layernorm_normalization():
 
   # Create input with known statistics.
   x = jnp.array([[1.0, 2.0, 3.0, 4.0, 5.0]])
-  params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=0))
+  params = bx.Params(bx.Rng(graph.child('rng')), seed=0)
 
   y, _ = ln(params, x)
 
@@ -40,7 +40,7 @@ def test_layernorm_learnable_params():
   ln = bx.LayerNorm(graph.child('ln'))
 
   x = jnp.ones((2, 16))
-  params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=0))
+  params = bx.Params(bx.Rng(graph.child('rng')), seed=0)
 
   _, params = ln(params, x)
   params = params.finalized()
@@ -57,7 +57,7 @@ def test_rmsnorm_shapes():
   rms = bx.RMSNorm(graph.child('rms'))
 
   x = jnp.ones((2, 10, 32))
-  params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=0))
+  params = bx.Params(bx.Rng(graph.child('rng')), seed=0)
 
   y, params = rms(params, x)
 
@@ -70,7 +70,7 @@ def test_rmsnorm_normalization():
   rms = bx.RMSNorm(graph.child('rms'), use_scale=False)
 
   x = jnp.array([[1.0, 2.0, 3.0, 4.0]])
-  params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=0))
+  params = bx.Params(bx.Rng(graph.child('rng')), seed=0)
 
   y, _ = rms(params, x)
 
@@ -87,7 +87,7 @@ def test_batchnorm_shapes():
   bn = bx.BatchNorm(graph.child('bn'))
 
   x = jnp.ones((4, 8, 8, 32))  # NHWC format
-  params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=0))
+  params = bx.Params(bx.Rng(graph.child('rng')), seed=0)
 
   y, params = bn(params, x, is_training=True)
 
@@ -103,7 +103,7 @@ def test_batchnorm_training_vs_inference():
   batch1 = jnp.array([[1.0, 2.0, 3.0, 4.0], [5.0, 6.0, 7.0, 8.0]])
   batch2 = jnp.array([[10.0, 20.0, 30.0, 40.0], [50.0, 60.0, 70.0, 80.0]])
 
-  params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=0))
+  params = bx.Params(bx.Rng(graph.child('rng')), seed=0)
 
   # Training: uses batch statistics.
   y1, params = bn(params, batch1, is_training=True)
@@ -134,7 +134,7 @@ def test_batchnorm_running_stats_update():
 
   # Use data with non-zero mean and non-unit variance.
   x = jnp.array([[1.0, 10.0], [5.0, 20.0]])
-  params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=0))
+  params = bx.Params(bx.Rng(graph.child('rng')), seed=0)
 
   # Initialize.
   _, params = bn(params, x, is_training=True)
@@ -169,7 +169,7 @@ def test_batchnorm_learnable_params():
   bn = bx.BatchNorm(graph.child('bn'))
 
   x = jnp.ones((2, 16))
-  params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=0))
+  params = bx.Params(bx.Rng(graph.child('rng')), seed=0)
 
   _, params = bn(params, x, is_training=True)
   params = params.finalized()
