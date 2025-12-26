@@ -6,10 +6,11 @@ import pytest
 def test_dropout_training_mode():
   """Verifies that dropout zeros some elements during training."""
   graph = bx.Graph('root')
-  dropout = bx.Dropout(graph.child('dropout'), rate=0.5)
+  rng = bx.Rng(graph.child('rng'))
+  dropout = bx.Dropout(graph.child('dropout'), rate=0.5, rng=rng)
 
   x = jnp.ones((100, 100))
-  params = bx.Params(bx.Rng(graph.child('rng')), seed=42)
+  params = rng.seed(bx.Params(), seed=42)
 
   y, params = dropout(params, x, is_training=True)
 
@@ -24,10 +25,11 @@ def test_dropout_training_mode():
 def test_dropout_inference_mode():
   """Verifies that dropout is identity during inference."""
   graph = bx.Graph('root')
-  dropout = bx.Dropout(graph.child('dropout'), rate=0.5)
+  rng = bx.Rng(graph.child('rng'))
+  dropout = bx.Dropout(graph.child('dropout'), rate=0.5, rng=rng)
 
   x = jnp.ones((10, 10))
-  params = bx.Params(bx.Rng(graph.child('rng')), seed=42)
+  params = rng.seed(bx.Params(), seed=42)
 
   y, _ = dropout(params, x, is_training=False)
 
@@ -38,10 +40,11 @@ def test_dropout_inference_mode():
 def test_dropout_rng_consumption():
   """Verifies that dropout consumes RNG only during training."""
   graph = bx.Graph('root')
-  dropout = bx.Dropout(graph.child('dropout'), rate=0.5)
+  rng = bx.Rng(graph.child('rng'))
+  dropout = bx.Dropout(graph.child('dropout'), rate=0.5, rng=rng)
 
   x = jnp.ones((10, 10))
-  params = bx.Params(bx.Rng(graph.child('rng')), seed=42)
+  params = rng.seed(bx.Params(), seed=42)
 
   # RNG counter is stored under the Rng module's graph path.
   counter_path = ('root', 'rng', 'counter')
@@ -62,12 +65,13 @@ def test_dropout_rng_consumption():
 def test_dropout_scaling():
   """Verifies that dropout scales output to maintain expected value."""
   graph = bx.Graph('root')
+  rng = bx.Rng(graph.child('rng'))
   rate = 0.5
-  dropout = bx.Dropout(graph.child('dropout'), rate=rate)
+  dropout = bx.Dropout(graph.child('dropout'), rate=rate, rng=rng)
 
   # Use large input to get stable statistics.
   x = jnp.ones((1000, 1000))
-  params = bx.Params(bx.Rng(graph.child('rng')), seed=42)
+  params = rng.seed(bx.Params(), seed=42)
 
   y, _ = dropout(params, x, is_training=True)
 
@@ -84,10 +88,11 @@ def test_dropout_scaling():
 def test_dropout_zero_rate():
   """Verifies that dropout with rate=0 is identity."""
   graph = bx.Graph('root')
-  dropout = bx.Dropout(graph.child('dropout'), rate=0.0)
+  rng = bx.Rng(graph.child('rng'))
+  dropout = bx.Dropout(graph.child('dropout'), rate=0.0, rng=rng)
 
   x = jnp.ones((10, 10))
-  params = bx.Params(bx.Rng(graph.child('rng')), seed=42)
+  params = rng.seed(bx.Params(), seed=42)
 
   y, params_out = dropout(params, x, is_training=True)
 
@@ -102,9 +107,10 @@ def test_dropout_zero_rate():
 def test_dropout_invalid_rate():
   """Verifies that invalid dropout rates raise errors."""
   graph = bx.Graph('root')
+  rng = bx.Rng(graph.child('rng'))
 
   with pytest.raises(ValueError, match='Dropout rate must be in'):
-    bx.Dropout(graph.child('dropout'), rate=1.0)
+    bx.Dropout(graph.child('dropout'), rate=1.0, rng=rng)
 
   with pytest.raises(ValueError, match='Dropout rate must be in'):
-    bx.Dropout(graph.child('dropout2'), rate=-0.1)
+    bx.Dropout(graph.child('dropout2'), rate=-0.1, rng=rng)

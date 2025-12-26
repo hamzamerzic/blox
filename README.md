@@ -20,6 +20,14 @@ Most JAX neural network libraries try to force Object-Oriented paradigms to make
 
 **blox** takes the opposite approach. Instead of hiding JAX's functional approach, it leans into it, building a minimal abstraction layer on top. By stripping away the "magic", **blox** ensures explicit data flow and keeps your code transparent, free of side effects, and trivially compatible with JAX's powerful transformations.
 
+## 🎯 Who is blox for?
+
+**blox** is designed for two audiences:
+
+* **Students and educators** who want to learn JAX without having to learn a ton of new abstractions. With **blox**, what you see is what you get: pure functions, explicit state, and no hidden magic. This makes it an excellent educational tool for understanding how neural networks actually work at the JAX level.
+
+* **Practitioners** who want full control over the execution stack. If you're tired of fighting frameworks that hide important details, **blox** gives you complete transparency while still providing the conveniences you need for building real models.
+
 ## ⚡ Core Principles & Features
 
 * **Native JAX compatibility:** Works with all JAX transformations, including `jax.jit`, `jax.grad`, `jax.vmap`, `jax.shard_map`, `jax.checkpoint`, and others. No special wrappers or decorators are required.
@@ -58,9 +66,11 @@ class CustomLinear(bx.Module):
       self,
       graph: bx.Graph,
       output_size: int,
+      rng: bx.Rng,
   ) -> None:
     super().__init__(graph)
     self.output_size = output_size
+    self.rng = rng
 
   def __call__(
       self,
@@ -74,13 +84,15 @@ class CustomLinear(bx.Module):
         params=params,
         name='kernel',
         shape=(inputs.shape[-1], self.output_size),
-        init=jax.nn.initializers.glorot_uniform()
+        init=jax.nn.initializers.glorot_uniform(),
+        rng=self.rng,
     )
     bias, params = self.get_param(
         params=params,
         name='bias',
         shape=(self.output_size,),
-        init=jax.nn.initializers.zeros
+        init=jax.nn.initializers.zeros,
+        rng=self.rng,
     )
     return inputs @ kernel + bias, params
 ```
@@ -100,10 +112,11 @@ class CustomMLP(bx.Module):
       hidden_size: int,
       # We can inject externally created modules...
       output_projection: bx.Module,
+      rng: bx.Rng,
   ) -> None:
     super().__init__(graph)
     # ... or create new ones internally.
-    self.hidden_proj = CustomLinear(graph.child('hidden'), hidden_size)
+    self.hidden_proj = CustomLinear(graph.child('hidden'), hidden_size, rng=rng)
     self.output_projection = output_projection
 
   def __call__(
@@ -124,22 +137,23 @@ We cleanly separate the "Initialization phase" (traversing the graph to create p
 ```python
 # Define the structure for wiring modules.
 graph = bx.Graph('net')
+rng = bx.Rng(graph.child('rng'))
 
 # Create the output layer explicitly and use it to create our CustomMLP.
-output_projection = CustomLinear(graph.child('linear'), output_size=1)
+output_projection = CustomLinear(graph.child('linear'), output_size=1, rng=rng)
 model = CustomMLP(
     graph.child('mlp'),
     hidden_size=32,
     output_projection=output_projection,
+    rng=rng,
 )
 
 # Create dummy input data to infer shapes.
 inputs = jnp.ones((1, 10))
 
 # Initialize the parameters.
-# Params requires an Rng module for handling randomness.
-rng = bx.Rng(graph.child('rng'))
-params = bx.Params(rng, seed=42)
+params = bx.Params()  # Create empty container to hold the full model state.
+params = rng.seed(params, seed=42)  # Initialize the Rng's state.
 
 # Run a forward pass to trigger lazy initialization to populates Params.
 unused_outputs, params = model(params, inputs)
@@ -248,15 +262,16 @@ def train_step(params, inputs, targets):
 
 JAX's `jit` handles RNG splitting automatically. However, when using explicit parallelization like `jax.vmap` or `jax.shard_map`, you want distinct behavior on each device or batch element (e.g. unique dropout masks or params per shard).
 
-If you simply passed the same `params` (and thus the same RNG state) to every device, they would all produce identical random numbers. **blox** solves this by letting you "fold in" axes. This keeps the base RNG state replicated (identical across devices) but mixes in the device index to generate unique keys per device.
+If you simply passed the same `params` (and thus the same RNG state) to every device, they would all produce identical random numbers. **blox** solves this by automatically "folding in" axes when using `bx.Rng(..., auto_fold_in_axes=True)`. This keeps the base RNG state replicated (identical across devices) but folds in the device/batch index to generate unique keys per device.
 
 ```python
+# By default, Rng automatically folds in vmap/shard_map axes.
+rng = bx.Rng(graph.child('rng'), auto_fold_in_axes=True)
+
 def apply_model(params, inputs):
-  # Fold in the batch axis so each batch element gets a unique RNG stream.
-  params = params.fold_in_axes('batch')
+  # No manual folding needed! Rng detects the 'batch' axis from vmap.
   outputs, params = dropout(params, inputs, is_training=True)
-  # Fold out before returning to restore the replicated state structure.
-  return outputs, params.fold_out_axes('batch')
+  return outputs, params
 
 # Note that params (including the Rng) are replicated.
 batched_outputs = jax.vmap(
@@ -265,6 +280,30 @@ batched_outputs = jax.vmap(
     out_axes=(0, None),
     axis_name='batch'
 )(params, inputs)
+```
+
+### Manual RNG Control
+
+For full control over how RNG keys are generated (e.g. specialized folding or
+key manipulation), you can disable automatic folding.
+
+```python
+# Disable automatic folding for manual control.
+rng = bx.Rng(graph.child('rng'), auto_fold_in_axes=False)
+
+def apply_model(params, inputs):
+  # Manually get and manipulate the seed.
+  original_seed = rng.get_seed(params)
+  folded_seed = jax.random.fold_in(original_seed, jax.lax.axis_index('batch'))
+  
+  # Update params with the new seed.
+  params = rng.seed(params, seed=folded_seed)
+  
+  # Forward pass uses the manual seed.
+  outputs, params = model(params, inputs)
+  
+  # Restore the original seed before returning to keep state replicated.
+  return outputs, rng.seed(params, seed=original_seed)
 ```
 
 ## 📈 Scaling Up
@@ -277,17 +316,19 @@ Below we show how to specify sharding metadata per module and extract it without
 from jax.sharding import NamedSharding, PartitionSpec as P
 
 graph = bx.Graph('net')
+rng = bx.Rng(graph.child('rng'))
 linear = bx.Linear(
   graph.child('linear'),
   output_size=1024,
+  rng=rng,
   kernel_metadata={'sharding': (None, 'model')},
   bias_metadata={'sharding': ('model',)},
 )
-rng = bx.Rng(graph.child('rng'))
 
 # Define an initialization function.
 def init(x):
-  _, params = linear(bx.Params(rng, seed=42), x)
+  params = rng.seed(bx.Params(), seed=42)
+  _, params = linear(params, x)
   return params.finalized()
 
 # Abstract evaluation to get the Params structure (no memory allocation).
@@ -322,7 +363,7 @@ out, new_params = forward(sharded_params, inputs)
 In simple terms, `bx.SequenceBase` should be used to implement a Transformer model and `bx.RecurrenceBase` to implement a standard `LSTM`.
 
 ```python
-lstm = bx.LSTM(graph.child('lstm'), hidden_size=128)
+lstm = bx.LSTM(graph.child('lstm'), hidden_size=128, rng=rng)
 
 # Initialize the LSTM state.
 state, params = lstm.initial_state(params, inputs)
@@ -349,11 +390,9 @@ Because **blox** is functional, methods on `Params` return *new* instances rathe
 ```python
 # ✗ Wrong - result is discarded.
 params.finalized()
-params.fold_in_axes('batch')
 
 # ✓ Correct - reassign to capture the new instance.
 params = params.finalized()
-params = params.fold_in_axes('batch')
 ```
 
 The same applies to `Rng` accessor methods like `seed()`:
@@ -366,7 +405,7 @@ rng.seed(params, counter=0)
 params = rng.seed(params, counter=0)
 ```
 
-When using `jax.vmap` or `jax.shard_map`, remember that the same `params` (and RNG state) would produce identical random numbers on each device/batch element. Use `fold_in_axes` and `fold_out_axes` to get unique keys per device. See the [Batching & Parallel RNG](#-batching--parallel-rng-vmap--shard_map) section for details.
+When using `jax.vmap` or `jax.shard_map`, remember that the same `params` (and RNG state) would produce identical random numbers on each device/batch element unless you use `auto_fold_in_axes=True` (the default) on your `Rng` module. See the [Batching & Parallel RNG](#-batching--parallel-rng-vmap--shard_map) section for details.
 
 ## ⚖️ Why blox?
 

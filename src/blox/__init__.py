@@ -16,8 +16,8 @@ Key Concepts:
   materialized only when you run a forward pass with `params` containing an RNG.
 - **JAX Compatibility:** Works seamlessly with `jax.jit`, `jax.vmap`, `jax.grad`,
   and `jax.shard_map`.
-- **Structural RNG:** Randomness is handled via `Params`. Use `params.fold_in_axes()`
-  inside `vmap`/`shard_map` to automatically split keys across devices/batches.
+- **Structural RNG:** Randomness is handled via `Params`. `Rng` automatically folds
+  in `vmap`/`shard_map` axes to split keys across devices/batches.
 
 Gotchas:
 - **Purity:** Modules must be pure. Do not store state in `self`. Use `get_param`.
@@ -26,6 +26,8 @@ Gotchas:
 - **Sequence Models:** RNNs (`LSTM`, `GRU`) process entire sequences by default
   using `jax.lax.scan`. Use `__call__` for single-step processing.
 """
+
+from importlib.metadata import version as _version
 
 from .blocks import (
     GRU,
@@ -57,8 +59,6 @@ from .interfaces import (
     static_scan,
 )
 from .visualize import display
-
-from importlib.metadata import version as _version
 
 __version__ = _version('jax-blox')
 

@@ -6,7 +6,7 @@ The main entry point is `display(graph, params)`.
 Example:
   graph = bx.Graph('net')
   linear = bx.Linear(graph.child('linear'), output_size=32)
-  params = bx.Params(rng=bx.Rng(graph.child('rng'), seed=42))
+  params = rng.seed(bx.Params(), seed=42)
   _, params = linear(params, x)
   bx.display(graph, params)
 """
@@ -237,7 +237,7 @@ def display(graph: bx.Graph, params: bx.Params) -> None:
     graph = bx.Graph('net')
     encoder = bx.Linear(graph / 'encoder', output_size=256)
     decoder = bx.Linear(graph / 'decoder', output_size=128)
-    params = bx.Params(rng=bx.Rng(graph / 'rng', seed=42))
+    params = rng.seed(bx.Params(), seed=42)
     _, params = encoder(params, x)
     _, params = decoder(params, encoder_out)
     bx.display(graph, params)

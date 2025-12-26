@@ -8,10 +8,13 @@ import jax.numpy as jnp
 def test_embed_shapes():
   """Verifies embedding lookup output shapes."""
   graph = bx.Graph('root')
-  embed = bx.Embed(graph.child('embed'), num_embeddings=100, embedding_size=32)
+  rng = bx.Rng(graph.child('rng'))
+  embed = bx.Embed(
+      graph.child('embed'), num_embeddings=100, embedding_size=32, rng=rng
+  )
 
   indices = jnp.array([0, 5, 10, 50])
-  params = bx.Params(bx.Rng(graph.child('rng')), seed=0)
+  params = rng.seed(bx.Params(), seed=0)
 
   embeddings, params = embed(params, indices)
 
@@ -24,11 +27,14 @@ def test_embed_shapes():
 def test_embed_batched():
   """Verifies embedding lookup with batched indices."""
   graph = bx.Graph('root')
-  embed = bx.Embed(graph.child('embed'), num_embeddings=100, embedding_size=16)
+  rng = bx.Rng(graph.child('rng'))
+  embed = bx.Embed(
+      graph.child('embed'), num_embeddings=100, embedding_size=16, rng=rng
+  )
 
   # [batch, seq_len]
   indices = jnp.array([[0, 1, 2], [10, 20, 30]])
-  params = bx.Params(bx.Rng(graph.child('rng')), seed=0)
+  params = rng.seed(bx.Params(), seed=0)
 
   embeddings, params = embed(params, indices)
 
@@ -42,11 +48,14 @@ def test_embed_batched():
 def test_embed_attend_shapes():
   """Verifies attend (weight-tied projection) output shapes."""
   graph = bx.Graph('root')
-  embed = bx.Embed(graph.child('embed'), num_embeddings=100, embedding_size=32)
+  rng = bx.Rng(graph.child('rng'))
+  embed = bx.Embed(
+      graph.child('embed'), num_embeddings=100, embedding_size=32, rng=rng
+  )
 
   # Initialize with forward pass.
   indices = jnp.array([0, 1, 2])
-  params = bx.Params(bx.Rng(graph.child('rng')), seed=0)
+  params = rng.seed(bx.Params(), seed=0)
   _, params = embed(params, indices)
   params = params.finalized()
 
@@ -60,9 +69,12 @@ def test_embed_attend_shapes():
 def test_embed_weight_tying():
   """Verifies that attend uses the same weights as the embedding lookup."""
   graph = bx.Graph('root')
-  embed = bx.Embed(graph.child('embed'), num_embeddings=10, embedding_size=4)
+  rng = bx.Rng(graph.child('rng'))
+  embed = bx.Embed(
+      graph.child('embed'), num_embeddings=10, embedding_size=4, rng=rng
+  )
 
-  params = bx.Params(bx.Rng(graph.child('rng')), seed=42)
+  params = rng.seed(bx.Params(), seed=42)
 
   # Initialize by looking up one index.
   indices = jnp.array([0])
@@ -85,11 +97,14 @@ def test_embed_weight_tying():
 def test_embed_learning():
   """Verifies gradients propagate through embedding layer."""
   graph = bx.Graph('root')
-  embed = bx.Embed(graph.child('embed'), num_embeddings=10, embedding_size=4)
+  rng = bx.Rng(graph.child('rng'))
+  embed = bx.Embed(
+      graph.child('embed'), num_embeddings=10, embedding_size=4, rng=rng
+  )
 
   indices = jnp.array([0, 1, 2])
   target = jnp.ones((3, 4)) * 5.0
-  params = bx.Params(bx.Rng(graph.child('rng')), seed=42)
+  params = rng.seed(bx.Params(), seed=42)
 
   # Initialize.
   _, params = embed(params, indices)
@@ -128,10 +143,13 @@ def test_embed_learning():
 def test_embed_parameter_path():
   """Verifies the embedding parameter is stored at the correct path."""
   graph = bx.Graph('root')
-  embed = bx.Embed(graph.child('embed'), num_embeddings=50, embedding_size=8)
+  rng = bx.Rng(graph.child('rng'))
+  embed = bx.Embed(
+      graph.child('embed'), num_embeddings=50, embedding_size=8, rng=rng
+  )
 
   indices = jnp.array([0])
-  params = bx.Params(bx.Rng(graph.child('rng')), seed=0)
+  params = rng.seed(bx.Params(), seed=0)
 
   _, params = embed(params, indices)
   params = params.finalized()

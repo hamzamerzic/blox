@@ -8,19 +8,20 @@ def test_rng_updates_during_training():
   """Verifies that non-trainable state (RNG) is correctly updated after grad."""
   # Setup the model graph and layer.
   graph = bx.Graph('root')
-  model = bx.Linear(graph.child('linear'), output_size=1)
+  rng = bx.Rng(graph.child('rng'))
+  model = bx.Linear(graph.child('linear'), output_size=1, rng=rng)
 
   # Initialize data and parameters.
   x = jnp.ones((1, 5))
   y = jnp.ones((1, 1))
 
   # Create params with an Rng.
-  params = bx.Params(bx.Rng(graph.child('rng')), seed=42)
+  params = rng.seed(bx.Params(), seed=42)
 
   # RNG counter path is under the Rng module's graph path.
   counter_path = ('root', 'rng', 'counter')
 
-  # Counter is created at Params initialization, starting at 0.
+  # Counter is created at seed initialization, starting at 0.
   assert counter_path in params._data
   assert params._data[counter_path].value == 0
 
@@ -32,9 +33,9 @@ def test_rng_updates_during_training():
 
   initial_counter = params._data[counter_path].value
 
-  # Counter increments once for kernel (lecun_normal needs key).
-  # Bias uses zeros() which works with key=None, so no increment.
-  assert initial_counter == 1
+  # We always generate a key for every param to ensure consistent
+  # initialization order regardless of which params use random init.
+  assert initial_counter == 2
 
   @jax.jit
   def train_step(p, inputs, targets):
@@ -69,12 +70,16 @@ def test_rng_updates_during_training():
   # Define a mock layer that consumes RNG during the forward pass.
   class MockDropout(bx.Module):
 
+    def __init__(self, g, rng):
+      super().__init__(g)
+      self.rng = rng
+
     def __call__(self, p, x):
       # Manually consume a key to simulate dropout.
-      _, new_p = p.next_key()
+      _, new_p = self.rng(p)
       return x, new_p
 
-  dropout = MockDropout(graph.child('drop'))
+  dropout = MockDropout(graph.child('drop'), rng)
 
   @jax.jit
   def dropout_train_step(p, inputs):
@@ -111,9 +116,10 @@ def test_checkpoint_produces_correct_gradients():
   - layer3 output: saved
   """
   graph = bx.Graph('root')
-  layer1 = bx.Linear(graph.child('layer1'), output_size=32)
-  layer2 = bx.Linear(graph.child('layer2'), output_size=32)
-  layer3 = bx.Linear(graph.child('layer3'), output_size=8)
+  rng = bx.Rng(graph.child('rng'))
+  layer1 = bx.Linear(graph.child('layer1'), output_size=32, rng=rng)
+  layer2 = bx.Linear(graph.child('layer2'), output_size=32, rng=rng)
+  layer3 = bx.Linear(graph.child('layer3'), output_size=8, rng=rng)
 
   def forward(p, inputs):
     h, p = layer1(p, inputs)
@@ -141,7 +147,7 @@ def test_checkpoint_produces_correct_gradients():
   y = jnp.ones((4, 8))
 
   # Initialize params by running forward.
-  params = bx.Params(bx.Rng(graph.child('rng')), seed=42)
+  params = rng.seed(bx.Params(), seed=42)
   _, params = forward(params, x)
   params = params.finalized()
 
@@ -182,9 +188,10 @@ def test_checkpoint_with_dropout():
   checkpoint boundary and "restored" during recomputation.
   """
   graph = bx.Graph('root')
-  linear1 = bx.Linear(graph.child('linear1'), output_size=16)
-  linear2 = bx.Linear(graph.child('linear2'), output_size=8)
-  dropout = bx.Dropout(graph.child('dropout'), rate=0.5)
+  rng = bx.Rng(graph.child('rng'))
+  linear1 = bx.Linear(graph.child('linear1'), output_size=16, rng=rng)
+  linear2 = bx.Linear(graph.child('linear2'), output_size=8, rng=rng)
+  dropout = bx.Dropout(graph.child('dropout'), rate=0.5, rng=rng)
 
   def forward(p, inputs):
     h, p = linear1(p, inputs)
@@ -210,7 +217,7 @@ def test_checkpoint_with_dropout():
   y = jnp.ones((4, 8))
 
   # Initialize params by running forward.
-  params = bx.Params(bx.Rng(graph.child('rng')), seed=42)
+  params = rng.seed(bx.Params(), seed=42)
   _, params = forward(params, x)
   params = params.finalized()
 
@@ -253,7 +260,7 @@ def test_rng_get_set_seed():
   """Verifies get_seed and seed methods on Rng."""
   graph = bx.Graph('root')
   rng = bx.Rng(graph.child('rng'))
-  params = bx.Params(rng, seed=42)
+  params = rng.seed(bx.Params(), seed=42)
 
   # get_seed returns the seed key.
   key1 = rng.get_seed(params)
@@ -280,14 +287,14 @@ def test_rng_get_set_counter():
   """Verifies get_counter and seed(counter=) methods on Rng."""
   graph = bx.Graph('root')
   rng = bx.Rng(graph.child('rng'))
-  params = bx.Params(rng, seed=42)
+  params = rng.seed(bx.Params(), seed=42)
 
   # get_counter returns counter value (starts at 0).
   counter1 = rng.get_counter(params)
   assert counter1 == 0
 
-  # Calling next_key increments the counter.
-  _, params = params.next_key()
+  # Calling rng increments the counter.
+  _, params = rng(params)
   counter2 = rng.get_counter(params)
   assert counter2 == 1
 
@@ -305,12 +312,12 @@ def test_rng_reseed_pattern():
   """Verifies the reseed pattern using seed()."""
   graph = bx.Graph('root')
   rng = bx.Rng(graph.child('rng'))
-  params = bx.Params(rng, seed=42)
+  params = rng.seed(bx.Params(), seed=42)
 
   # Initialize and consume some keys.
-  _, params = params.next_key()
-  _, params = params.next_key()
-  _, params = params.next_key()
+  _, params = rng(params)
+  _, params = rng(params)
+  _, params = rng(params)
   params = params.finalized()
 
   counter_before = rng.get_counter(params)
@@ -327,62 +334,61 @@ def test_rng_reseed_pattern():
   assert jnp.array_equal(key_after, new_key)
 
 
-def test_next_key_fold_axes_parameter():
-  """Verifies next_key(fold_axes=False) skips axis folding."""
+def test_auto_fold_in_axes_produces_different_keys():
+  """Verifies auto_fold_in_axes produces different RNG keys per batch element."""
   graph = bx.Graph('root')
-  rng = bx.Rng(graph.child('rng'))
+  rng = bx.Rng(graph.child('rng'), auto_fold_in_axes=True)
 
-  def check_fold_axes(x):
-    # With fold_axes=True (default), keys differ per batch element.
-    params_folded = bx.Params(rng, seed=42).fold_in_axes('batch')
-    key_folded, _ = params_folded.next_key()
+  def get_key(x):
+    params = rng.seed(bx.Params(), seed=42)
+    key, _ = rng(params)
+    return key
 
-    # With fold_axes=False, keys are the same across batch elements.
-    params_unfolded = bx.Params(rng, seed=42).fold_in_axes('batch')
-    key_unfolded, _ = params_unfolded.next_key(fold_axes=False)
+  keys = jax.vmap(get_key, axis_name='batch')(jnp.ones((4, 1)))
 
-    return key_folded, key_unfolded
-
-  keys_folded, keys_unfolded = jax.vmap(check_fold_axes, axis_name='batch')(
-      jnp.ones((4, 1))
-  )
-
-  # Folded keys should differ across batch elements.
-  assert not jnp.array_equal(keys_folded[0], keys_folded[1])
-
-  # Unfolded keys should be identical across batch elements.
-  assert jnp.array_equal(keys_unfolded[0], keys_unfolded[1])
+  for i in range(1, 4):
+    assert not jnp.array_equal(keys[0], keys[i])
 
 
-def test_get_seed_fold_in_parameter():
-  """Verifies get_seed(fold_in=...) folds the seed."""
+def test_auto_fold_in_axes_disabled_produces_same_keys():
+  """Verifies auto_fold_in_axes=False produces same RNG keys across batch."""
   graph = bx.Graph('root')
-  rng = bx.Rng(graph.child('rng'))
-  params = bx.Params(rng, seed=42)
+  rng = bx.Rng(graph.child('rng'), auto_fold_in_axes=False)
 
-  # Without fold_in, get base seed.
-  base_seed = rng.get_seed(params)
+  def get_key(x):
+    params = rng.seed(bx.Params(), seed=42)
+    key, _ = rng(params)
+    return key
 
-  # With fold_in (int), get folded seed.
-  folded_seed_1 = rng.get_seed(params, fold_in=1)
-  folded_seed_2 = rng.get_seed(params, fold_in=2)
+  keys = jax.vmap(get_key, axis_name='batch')(jnp.ones((4, 1)))
 
-  # With fold_in (jax.Array), get folded seed.
-  folded_seed_arr = rng.get_seed(params, fold_in=jnp.array(1))
+  for i in range(1, 4):
+    assert jnp.array_equal(keys[0], keys[i])
 
-  # Base seed and folded seeds should all be different.
-  assert not jnp.array_equal(base_seed, folded_seed_1)
-  assert not jnp.array_equal(base_seed, folded_seed_2)
-  assert not jnp.array_equal(folded_seed_1, folded_seed_2)
 
-  # Same fold_in value gives same result (int vs array).
-  assert jnp.array_equal(folded_seed_1, folded_seed_arr)
+def test_auto_fold_in_axes_noop_outside_vmap():
+  """Verifies auto_fold_in_axes is a no-op outside vmap."""
+  graph = bx.Graph('root')
+  rng1 = bx.Rng(graph.child('rng1'), auto_fold_in_axes=True)
+  rng2 = bx.Rng(graph.child('rng2'), auto_fold_in_axes=False)
+
+  params = rng1.seed(bx.Params(), seed=42)
+  params = rng2.seed(params, seed=42)
+
+  # Outside vmap, both should produce the same keys.
+  key1, _ = rng1(params)
+  key2, _ = rng2(params)
+
+  assert jnp.array_equal(key1, key2)
 
 
 def test_module_param_path():
   """Verifies Module.param_path() returns correct paths."""
   graph = bx.Graph('root')
-  linear = bx.Linear(graph.child('encoder').child('layer'), output_size=4)
+  rng = bx.Rng(graph.child('rng'))
+  linear = bx.Linear(
+      graph.child('encoder').child('layer'), output_size=4, rng=rng
+  )
 
   # param_path returns the full tuple path for a parameter name.
   kernel_path = linear.param_path('kernel')
@@ -395,11 +401,11 @@ def test_module_param_path():
 def test_params_len_and_contains():
   """Verifies Params.__len__ and __contains__ work correctly."""
   graph = bx.Graph('root')
-  linear = bx.Linear(graph.child('linear'), output_size=4)
   rng = bx.Rng(graph.child('rng'))
+  linear = bx.Linear(graph.child('linear'), output_size=4, rng=rng)
 
   x = jnp.ones((2, 3))
-  params = bx.Params(rng, seed=42)
+  params = rng.seed(bx.Params(), seed=42)
   _, params = linear(params, x)
   params = params.finalized()
 

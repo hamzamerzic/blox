@@ -35,7 +35,7 @@ class Embed(bx.Module):
 
   Example:
     embed = Embed(
-      graph.child('embed'), num_embeddings=10000, embedding_size=512
+      graph.child('embed'), num_embeddings=10000, embedding_size=512, rng=rng
     )
 
     # Forward pass: indices -> embeddings
@@ -50,7 +50,10 @@ class Embed(bx.Module):
       graph: bx.Graph,
       num_embeddings: int,
       embedding_size: int,
-      embedding_init: Initializer | None = None,
+      rng: bx.Rng | None,
+      embedding_init: Initializer = jax.nn.initializers.variance_scaling(
+          1.0, 'fan_in', 'normal', out_axis=0
+      ),
       embedding_metadata: dict[str, Any] | None = None,
   ) -> None:
     """Initializes the Embed module.
@@ -59,19 +62,17 @@ class Embed(bx.Module):
       graph: The graph node for this module.
       num_embeddings: Size of the vocabulary (number of unique tokens).
       embedding_size: Dimensionality of the embedding vectors.
-      embedding_init: Initializer for the embedding matrix. Defaults to normal.
+      rng: Rng module for random initialization. If embedding_init is constant,
+        Rng is not required (but still recommended).
+      embedding_init: Initializer for the embedding matrix.
       embedding_metadata: Optional metadata for the embedding parameter.
     """
     super().__init__(graph)
     self.num_embeddings = num_embeddings
     self.embedding_size = embedding_size
+    self.rng = rng
+    self.embedding_init = embedding_init
     self.embedding_metadata = embedding_metadata
-    if embedding_init is not None:
-      self.embedding_init = embedding_init
-    else:
-      self.embedding_init = jax.nn.initializers.variance_scaling(
-          1.0, 'fan_in', 'normal', out_axis=0
-      )
 
   def __call__(
       self,
@@ -93,6 +94,7 @@ class Embed(bx.Module):
         shape=(self.num_embeddings, self.embedding_size),
         init=self.embedding_init,
         metadata=self.embedding_metadata,
+        rng=self.rng,
     )
     return embedding_matrix[indices], params
 
@@ -119,6 +121,7 @@ class Embed(bx.Module):
         shape=(self.num_embeddings, self.embedding_size),
         init=self.embedding_init,
         metadata=self.embedding_metadata,
+        rng=self.rng,
     )
     # inputs @ embedding_matrix.T
     return jnp.dot(inputs, embedding_matrix.T), params
@@ -133,6 +136,7 @@ class Linear(bx.Module):
     linear = Linear(
       graph.child('linear'),
       output_size=1024,
+      rng=rng,
       kernel_metadata={'sharding': (None, 'model')},  # Shard output dim
       bias_metadata={'sharding': ('model',)},
     )
@@ -142,9 +146,10 @@ class Linear(bx.Module):
       self,
       graph: bx.Graph,
       output_size: int,
+      rng: bx.Rng | None,
       use_bias: bool = True,
-      kernel_init: Initializer | None = None,
-      bias_init: Initializer | None = None,
+      kernel_init: Initializer = jax.nn.initializers.lecun_normal(),
+      bias_init: Initializer = jax.nn.initializers.zeros,
       kernel_metadata: dict[str, Any] | None = None,
       bias_metadata: dict[str, Any] | None = None,
   ) -> None:
@@ -153,9 +158,11 @@ class Linear(bx.Module):
     Args:
       graph: The graph node for this module.
       output_size: The dimensionality of the output features.
+      rng: Rng module for random initialization. If kernel_init and bias_init
+        are constant, Rng is not required (but still recommended).
       use_bias: Whether to add a learnable bias vector.
-      kernel_init: Initializer for the weight matrix. Defaults to Lecun Normal.
-      bias_init: Initializer for the bias vector. Defaults to Zeros.
+      kernel_init: Initializer for the weight matrix.
+      bias_init: Initializer for the bias vector.
       kernel_metadata: Optional metadata for the kernel parameter. Common keys:
         - 'sharding': tuple like (None, 'model') for model parallelism
       bias_metadata: Optional metadata for the bias parameter. Common keys:
@@ -163,9 +170,10 @@ class Linear(bx.Module):
     """
     super().__init__(graph)
     self.output_size = output_size
+    self.rng = rng
     self.use_bias = use_bias
-    self.kernel_init = kernel_init or jax.nn.initializers.lecun_normal()
-    self.bias_init = bias_init or jax.nn.initializers.zeros
+    self.kernel_init = kernel_init
+    self.bias_init = bias_init
     self.kernel_metadata = kernel_metadata
     self.bias_metadata = bias_metadata
 
@@ -199,6 +207,7 @@ class Linear(bx.Module):
         (input_size, self.output_size),
         self.kernel_init,
         metadata=self.kernel_metadata,
+        rng=self.rng,
     )
     outputs = jnp.dot(inputs, kernel, precision=precision)
 
@@ -209,6 +218,7 @@ class Linear(bx.Module):
           (self.output_size,),
           self.bias_init,
           metadata=self.bias_metadata,
+          rng=self.rng,
       )
       bias = jnp.broadcast_to(bias, outputs.shape)
       outputs = outputs + bias
@@ -304,7 +314,7 @@ class LSTM(bx.RecurrenceBase[jax.Array, LSTMState, jax.Array, jax.Array]):
   and efficient sequence processing (`apply` with scanning).
 
   Example:
-    lstm = LSTM(graph.child('lstm'), hidden_size=128)
+    lstm = LSTM(graph.child('lstm'), hidden_size=128, rng=rng)
 
     # Initialize state first:
     state, params = lstm.initial_state(params, inputs)
@@ -320,6 +330,7 @@ class LSTM(bx.RecurrenceBase[jax.Array, LSTMState, jax.Array, jax.Array]):
       self,
       graph: bx.Graph,
       hidden_size: int,
+      rng: bx.Rng | None,
       is_static: bool = False,
   ) -> None:
     """Initializes the LSTM.
@@ -327,13 +338,16 @@ class LSTM(bx.RecurrenceBase[jax.Array, LSTMState, jax.Array, jax.Array]):
     Args:
       graph: The graph node for this module.
       hidden_size: The dimensionality of the hidden and cell states.
+      rng: Rng module for random initialization.
       is_static: If True, uses Python loops for sequence processing.
                  If False, uses jax.lax.scan (default).
     """
     super().__init__(graph, is_static)
     self.hidden_size = hidden_size
-    # We use a single Linear layer to project inputs to the 4 gates (i, g, f, o).
-    self.gates = Linear(graph.child('gates'), output_size=4 * hidden_size)
+    # Using a single Linear layer to project inputs to the 4 gates (i, g, f, o).
+    self.gates = Linear(
+        graph.child('gates'), output_size=4 * hidden_size, rng=rng
+    )
 
   def initial_state(
       self, params: bx.Params, inputs: jax.Array
@@ -429,7 +443,7 @@ class GRU(bx.RecurrenceBase[jax.Array, GRUState, jax.Array, jax.Array]):
   where x is the input and h is the output of the previous time step.
 
   Example:
-    gru = GRU(graph.child('gru'), hidden_size=128)
+    gru = GRU(graph.child('gru'), hidden_size=128, rng=rng)
     state, params = gru.initial_state(params, inputs)
     (outputs, state), params = gru(params, inputs, state)
   """
@@ -438,6 +452,7 @@ class GRU(bx.RecurrenceBase[jax.Array, GRUState, jax.Array, jax.Array]):
       self,
       graph: bx.Graph,
       hidden_size: int,
+      rng: bx.Rng | None,
       is_static: bool = False,
   ) -> None:
     """Initializes the GRU.
@@ -445,6 +460,7 @@ class GRU(bx.RecurrenceBase[jax.Array, GRUState, jax.Array, jax.Array]):
     Args:
       graph: The graph node for this module.
       hidden_size: The dimensionality of the hidden state.
+      rng: Rng module for random initialization.
       is_static: If True, uses Python loops. If False, uses jax.lax.scan.
     """
     super().__init__(graph, is_static)
@@ -452,8 +468,12 @@ class GRU(bx.RecurrenceBase[jax.Array, GRUState, jax.Array, jax.Array]):
     # We use two linear layers:
     # Update and reset gates (z, r) computed from x and h.
     # Candidate hidden state (h_tilde) computed from x and (r * h).
-    self.gates = Linear(graph.child('gates'), output_size=2 * hidden_size)
-    self.candidate = Linear(graph.child('candidate'), output_size=hidden_size)
+    self.gates = Linear(
+        graph.child('gates'), output_size=2 * hidden_size, rng=rng
+    )
+    self.candidate = Linear(
+        graph.child('candidate'), output_size=hidden_size, rng=rng
+    )
 
   def initial_state(
       self, params: bx.Params, inputs: jax.Array
@@ -522,33 +542,23 @@ class Dropout(bx.Module):
   the remaining elements by `1 / (1 - rate)` to maintain expected values.
   During inference, this layer is a no-op.
 
-  Can optionally use its own Rng module instead of params.next_key() for
-  finer control over randomness streams.
-
-  For shard_map/vmap usage where different devices need different dropout masks,
-  call `params.fold_in_axes('axis_name')` at the start and `fold_out_axes()` at
-  the end:
-
-    @jax.vmap(..., axis_name='batch')
-    def apply(params, x):
-      params = params.fold_in_axes('batch')
-      out, params = dropout(params, x, is_training=True)
-      return out, params.fold_out_axes('batch')
+  Example:
+    dropout = Dropout(graph.child('dropout'), rate=0.5, rng=rng)
+    y, params = dropout(params, x, is_training=True)
   """
 
   def __init__(
       self,
       graph: bx.Graph,
-      rate: float = 0.5,
-      rng: bx.Rng | None = None,
+      rate: float,
+      rng: bx.Rng,
   ) -> None:
     """Initializes the Dropout module.
 
     Args:
       graph: The graph node for this module.
       rate: The probability of dropping each element (0.0 to 1.0).
-      rng: Optional Rng module for this layer. If provided, uses this instead
-        of params.next_key() for generating dropout masks.
+      rng: Rng module for generating dropout masks.
     """
     super().__init__(graph)
     if not 0.0 <= rate < 1.0:
@@ -575,12 +585,7 @@ class Dropout(bx.Module):
     if not is_training or self.rate == 0.0:
       return inputs, params
 
-    # Use module-owned RNG if provided, otherwise params.next_key().
-    if self.rng is not None:
-      key, params = self.rng(params)
-    else:
-      key, params = params.next_key()
-
+    key, params = self.rng(params)
     keep_rate = 1.0 - self.rate
     mask = jax.random.bernoulli(key, keep_rate, inputs.shape)
     return inputs * mask / keep_rate, params
@@ -599,10 +604,11 @@ class LayerNorm(bx.Module):
       epsilon: float = 1e-5,
       use_scale: bool = True,
       use_bias: bool = True,
-      scale_init: Initializer | None = None,
-      bias_init: Initializer | None = None,
+      scale_init: Initializer = jax.nn.initializers.ones,
+      bias_init: Initializer = jax.nn.initializers.zeros,
       axis_name: str | None = None,
       axis_index_groups: Sequence[Sequence[int]] | None = None,
+      rng: bx.Rng | None = None,
   ) -> None:
     """Initializes the LayerNorm module.
 
@@ -611,23 +617,25 @@ class LayerNorm(bx.Module):
       epsilon: Small constant for numerical stability.
       use_scale: Whether to use a learnable scale parameter.
       use_bias: Whether to use a learnable bias parameter.
-      scale_init: Initializer for scale. Defaults to ones.
-      bias_init: Initializer for bias. Defaults to zeros.
+      scale_init: Initializer for scale.
+      bias_init: Initializer for bias.
       axis_name: The axis name used to combine statistics from multiple devices.
         See jax.shard_map for a description of axis names.
       axis_index_groups: Groups of axis indices within that named axis
         representing subsets of devices to reduce over. For example,
         [[0, 1], [2, 3]] would independently normalize over the first two and
         last two devices. See jax.lax.psum for more details.
+      rng: Rng module. Required if using stochastic initializers for scale/bias.
     """
     super().__init__(graph)
     self.epsilon = epsilon
     self.use_scale = use_scale
     self.use_bias = use_bias
-    self.scale_init = scale_init or jax.nn.initializers.ones
-    self.bias_init = bias_init or jax.nn.initializers.zeros
+    self.scale_init = scale_init
+    self.bias_init = bias_init
     self.axis_name = axis_name
     self.axis_index_groups = axis_index_groups
+    self.rng = rng
 
   def __call__(
       self,
@@ -668,6 +676,7 @@ class LayerNorm(bx.Module):
           name='scale',
           shape=(features,),
           init=self.scale_init,
+          rng=self.rng,
       )
       normalized = normalized * scale
 
@@ -677,6 +686,7 @@ class LayerNorm(bx.Module):
           name='bias',
           shape=(features,),
           init=self.bias_init,
+          rng=self.rng,
       )
       normalized = normalized + bias
 
@@ -696,9 +706,10 @@ class RMSNorm(bx.Module):
       graph: bx.Graph,
       epsilon: float = 1e-5,
       use_scale: bool = True,
-      scale_init: Initializer | None = None,
+      scale_init: Initializer = jax.nn.initializers.ones,
       axis_name: str | None = None,
       axis_index_groups: Sequence[Sequence[int]] | None = None,
+      rng: bx.Rng | None = None,
   ) -> None:
     """Initializes the RMSNorm module.
 
@@ -706,20 +717,22 @@ class RMSNorm(bx.Module):
       graph: The graph node for this module.
       epsilon: Small constant for numerical stability.
       use_scale: Whether to use a learnable scale parameter.
-      scale_init: Initializer for scale. Defaults to ones.
+      scale_init: Initializer for scale.
       axis_name: The axis name used to combine statistics from multiple devices.
         See jax.shard_map for a description of axis names.
       axis_index_groups: Groups of axis indices within that named axis
         representing subsets of devices to reduce over. For example,
         [[0, 1], [2, 3]] would independently normalize over the first two and
         last two devices. See jax.lax.psum for more details.
+      rng: Rng module. Required if using stochastic initializers for scale.
     """
     super().__init__(graph)
     self.epsilon = epsilon
     self.use_scale = use_scale
-    self.scale_init = scale_init or jax.nn.initializers.ones
+    self.scale_init = scale_init
     self.axis_name = axis_name
     self.axis_index_groups = axis_index_groups
+    self.rng = rng
 
   def __call__(
       self,
@@ -755,7 +768,7 @@ class RMSNorm(bx.Module):
     # Scale.
     if self.use_scale:
       scale, params = self.get_param(
-          params, 'scale', (features,), self.scale_init
+          params, 'scale', (features,), self.scale_init, rng=self.rng
       )
       normalized = normalized * scale
 
@@ -790,36 +803,39 @@ class BatchNorm(bx.Module):
       epsilon: float = 1e-5,
       use_scale: bool = True,
       use_bias: bool = True,
-      scale_init: Initializer | None = None,
-      bias_init: Initializer | None = None,
+      scale_init: Initializer = jax.nn.initializers.ones,
+      bias_init: Initializer = jax.nn.initializers.zeros,
       axis_name: str | None = None,
       axis_index_groups: Sequence[Sequence[int]] | None = None,
+      rng: bx.Rng | None = None,
   ) -> None:
     """Initializes the BatchNorm module.
 
     Args:
       graph: The graph node for this module.
       momentum: Momentum for the exponential moving average of running stats.
-        A value of 0.9 means running_stat = 0.9 * running_stat + 0.1 * batch_stat.
+        running_stat = momentum * running_stat + (1.0 - momentum) * batch_stat.
       epsilon: Small constant for numerical stability.
       use_scale: Whether to use a learnable scale parameter (gamma).
       use_bias: Whether to use a learnable bias parameter (beta).
-      scale_init: Initializer for scale. Defaults to ones.
-      bias_init: Initializer for bias. Defaults to zeros.
+      scale_init: Initializer for scale.
+      bias_init: Initializer for bias.
       axis_name: The axis name used to combine statistics from multiple devices.
         See jax.shard_map for a description of axis names.
       axis_index_groups: Groups of axis indices within that named axis
         representing subsets of devices to reduce over.
+      rng: Rng module. Required if using stochastic initializers for scale/bias.
     """
     super().__init__(graph)
     self.momentum = momentum
     self.epsilon = epsilon
     self.use_scale = use_scale
     self.use_bias = use_bias
-    self.scale_init = scale_init or jax.nn.initializers.ones
-    self.bias_init = bias_init or jax.nn.initializers.zeros
+    self.scale_init = scale_init
+    self.bias_init = bias_init
     self.axis_name = axis_name
     self.axis_index_groups = axis_index_groups
+    self.rng = rng
 
   def __call__(
       self,
@@ -849,6 +865,7 @@ class BatchNorm(bx.Module):
         shape=(features,),
         init=jax.nn.initializers.zeros,
         trainable=False,
+        rng=self.rng,
     )
     running_var, params = self.get_param(
         params=params,
@@ -856,6 +873,7 @@ class BatchNorm(bx.Module):
         shape=(features,),
         init=jax.nn.initializers.ones,
         trainable=False,
+        rng=self.rng,
     )
 
     if is_training:
@@ -899,12 +917,14 @@ class BatchNorm(bx.Module):
     # Scale and shift.
     if self.use_scale:
       scale, params = self.get_param(
-          params, 'scale', (features,), self.scale_init
+          params, 'scale', (features,), self.scale_init, rng=self.rng
       )
       normalized = normalized * scale
 
     if self.use_bias:
-      bias, params = self.get_param(params, 'bias', (features,), self.bias_init)
+      bias, params = self.get_param(
+          params, 'bias', (features,), self.bias_init, rng=self.rng
+      )
       normalized = normalized + bias
 
     return normalized, params
@@ -930,31 +950,36 @@ class Conv(bx.Module):
 
   Example:
     # 2D convolution for images (NHWC format)
-    conv = Conv(graph.child('conv'), output_channels=64, kernel_size=(3, 3))
+    conv = Conv(
+        graph.child('conv'), kernel_size=(3, 3), output_channels=64, rng=rng
+    )
     y, params = conv(params, x)  # x: [batch, height, width, channels]
 
     # 1D convolution for sequences (NLC format)
-    conv = Conv(graph.child('conv'), output_channels=64, kernel_size=3)
+    conv = Conv(graph.child('conv'), kernel_size=3, output_channels=64, rng=rng)
     y, params = conv(params, x)  # x: [batch, length, channels]
 
-    # Unbatched input
-    conv = Conv(graph.child('conv'), output_channels=64, kernel_size=(3, 3))
+    # Unbatched input.
+    conv = Conv(
+        graph.child('conv'), kernel_size=(3, 3), output_channels=64, rng=rng
+    )
     y, params = conv(params, x)  # x: [height, width, channels]
   """
 
   def __init__(
       self,
       graph: bx.Graph,
-      output_channels: int,
       kernel_size: int | Sequence[int],
+      output_channels: int,
+      rng: bx.Rng | None,
       strides: int | Sequence[int] = 1,
       padding: PaddingLike = 'SAME',
       input_dilation: int | Sequence[int] = 1,
       kernel_dilation: int | Sequence[int] = 1,
       feature_group_count: int = 1,
       use_bias: bool = True,
-      kernel_init: Initializer | None = None,
-      bias_init: Initializer | None = None,
+      kernel_init: Initializer = jax.nn.initializers.lecun_normal(),
+      bias_init: Initializer = jax.nn.initializers.zeros,
       kernel_metadata: dict[str, Any] | None = None,
       bias_metadata: dict[str, Any] | None = None,
   ) -> None:
@@ -962,10 +987,12 @@ class Conv(bx.Module):
 
     Args:
       graph: The graph node for this module.
-      output_channels: Number of output channels.
       kernel_size: Shape of the convolutional kernel as a tuple, determining
         the number of spatial dimensions (e.g., (3, 3) for 2D conv). For 1D
         convolution, either an int or a 1-tuple can be used.
+      output_channels: Number of output channels.
+      rng: Rng module for random initialization. If kernel_init and bias_init
+        are constant, Rng is not required (but still recommended).
       strides: Stride of the convolution. An int is broadcast to all spatial
         dimensions.
       padding: Padding mode. Either 'SAME', 'VALID', or a sequence of
@@ -975,24 +1002,25 @@ class Conv(bx.Module):
       feature_group_count: Number of feature groups for grouped convolution.
         Set to input_channels for depthwise convolution.
       use_bias: Whether to add a learnable bias.
-      kernel_init: Initializer for the kernel. Defaults to Lecun Normal.
-      bias_init: Initializer for the bias. Defaults to zeros.
+      kernel_init: Initializer for the kernel.
+      bias_init: Initializer for the bias.
       kernel_metadata: Optional metadata for the kernel parameter.
       bias_metadata: Optional metadata for the bias parameter.
     """
     super().__init__(graph)
-    self.output_channels = output_channels
     self.kernel_size = (
         (kernel_size,) if isinstance(kernel_size, int) else tuple(kernel_size)
     )
+    self.output_channels = output_channels
+    self.rng = rng
     self.strides = strides
     self.padding = padding
     self.input_dilation = input_dilation
     self.kernel_dilation = kernel_dilation
     self.feature_group_count = feature_group_count
     self.use_bias = use_bias
-    self.kernel_init = kernel_init or jax.nn.initializers.lecun_normal()
-    self.bias_init = bias_init or jax.nn.initializers.zeros
+    self.kernel_init = kernel_init
+    self.bias_init = bias_init
     self.kernel_metadata = kernel_metadata
     self.bias_metadata = bias_metadata
 
@@ -1028,7 +1056,7 @@ class Conv(bx.Module):
       )
 
     # Handle arbitrary batch dimensions by reshaping.
-    # Input: (*batch, *spatial, channels) -> (combined_batch, *spatial, channels)
+    # (*batch, *spatial, channels) -> (combined_batch, *spatial, channels)
     batch_shape = inputs.shape[: -num_spatial - 1]
     spatial_shape = inputs.shape[-num_spatial - 1 : -1]
     input_channels = inputs.shape[-1]
@@ -1054,6 +1082,7 @@ class Conv(bx.Module):
         kernel_shape,
         self.kernel_init,
         metadata=self.kernel_metadata,
+        rng=self.rng,
     )
 
     # Normalize strides and dilations to tuples.
@@ -1062,7 +1091,7 @@ class Conv(bx.Module):
     kernel_dilation = _normalize_tuple(self.kernel_dilation, num_spatial)
 
     # Build dimension numbers for channels-last format.
-    # Input: (N, *spatial, C) -> lax expects (N, C, *spatial)
+    # (N, *spatial, C) -> lax expects (N, C, *spatial)
     # We use dimension_numbers to avoid transposing.
     spatial_dims = tuple(range(1, num_spatial + 1))
     lhs_spec = (0, num_spatial + 1) + spatial_dims  # (N, C, *spatial)
@@ -1093,11 +1122,13 @@ class Conv(bx.Module):
           (self.output_channels,),
           self.bias_init,
           metadata=self.bias_metadata,
+          rng=self.rng,
       )
       outputs = outputs + bias
 
     # Reshape output back to original batch shape.
-    # Output: (combined_batch, *out_spatial, out_channels) -> (*batch, *out_spatial, out_channels)
+    # (combined_batch, *out_spatial, out_channels)
+    # -> (*batch, *out_spatial, out_channels)
     out_spatial = outputs.shape[1:-1]
     outputs = outputs.reshape(
         batch_shape + out_spatial + (self.output_channels,)
@@ -1119,11 +1150,9 @@ class ConvTranspose(bx.Module):
   convention: (*batch, *spatial_dims, channels).
 
   Example:
-    # 2D transposed convolution for images (NHWC format)
+    # 2D transposed convolution for images (NHWC format).
     conv_t = ConvTranspose(
-      graph.child('conv_t'),
-      output_channels=3,
-      kernel_size=(3, 3)
+        graph.child('conv_t'), kernel_size=(3, 3), output_channels=3, rng=rng
     )
     y, params = conv_t(params, x)  # x: [batch, height, width, channels]
   """
@@ -1131,15 +1160,16 @@ class ConvTranspose(bx.Module):
   def __init__(
       self,
       graph: bx.Graph,
-      output_channels: int,
       kernel_size: int | Sequence[int],
+      output_channels: int,
+      rng: bx.Rng | None,
       strides: int | Sequence[int] = 1,
       padding: PaddingLike = 'SAME',
       kernel_dilation: int | Sequence[int] = 1,
       feature_group_count: int = 1,
       use_bias: bool = True,
-      kernel_init: Initializer | None = None,
-      bias_init: Initializer | None = None,
+      kernel_init: Initializer = jax.nn.initializers.lecun_normal(),
+      bias_init: Initializer = jax.nn.initializers.zeros,
       kernel_metadata: dict[str, Any] | None = None,
       bias_metadata: dict[str, Any] | None = None,
   ) -> None:
@@ -1147,10 +1177,12 @@ class ConvTranspose(bx.Module):
 
     Args:
       graph: The graph node for this module.
-      output_channels: Number of output channels.
       kernel_size: Shape of the convolutional kernel as a tuple, determining
         the number of spatial dimensions (e.g., (3, 3) for 2D conv). For 1D
         convolution, either an int or a 1-tuple can be used.
+      output_channels: Number of output channels.
+      rng: Rng module for random initialization. If kernel_init and bias_init
+        are constant, Rng is not required (but still recommended).
       strides: Stride of the convolution. An int is broadcast to all spatial
         dimensions.
       padding: Padding mode. Either 'SAME', 'VALID', or a sequence of
@@ -1159,23 +1191,24 @@ class ConvTranspose(bx.Module):
       feature_group_count: Number of feature groups for grouped convolution.
         Set to input_channels for depthwise convolution.
       use_bias: Whether to add a learnable bias.
-      kernel_init: Initializer for the kernel. Defaults to Lecun Normal.
-      bias_init: Initializer for the bias. Defaults to zeros.
+      kernel_init: Initializer for the kernel.
+      bias_init: Initializer for the bias.
       kernel_metadata: Optional metadata for the kernel parameter.
       bias_metadata: Optional metadata for the bias parameter.
     """
     super().__init__(graph)
-    self.output_channels = output_channels
     self.kernel_size = (
         (kernel_size,) if isinstance(kernel_size, int) else tuple(kernel_size)
     )
+    self.output_channels = output_channels
+    self.rng = rng
     self.strides = strides
     self.padding = padding
     self.kernel_dilation = kernel_dilation
     self.feature_group_count = feature_group_count
     self.use_bias = use_bias
-    self.kernel_init = kernel_init or jax.nn.initializers.lecun_normal()
-    self.bias_init = bias_init or jax.nn.initializers.zeros
+    self.kernel_init = kernel_init
+    self.bias_init = bias_init
     self.kernel_metadata = kernel_metadata
     self.bias_metadata = bias_metadata
 
@@ -1205,13 +1238,13 @@ class ConvTranspose(bx.Module):
 
     if inputs.ndim < min_rank:
       raise ValueError(
-          f'Expected input rank >= {min_rank} for {num_spatial}D conv_transpose '
-          f'(at least {num_spatial} spatial dims + 1 channel dim), '
+          f'Expected input rank >= {min_rank} for {num_spatial}D conv_transpose'
+          f' (at least {num_spatial} spatial dims + 1 channel dim), '
           f'got {inputs.ndim}.'
       )
 
     # Handle arbitrary batch dimensions by reshaping.
-    # Input: (*batch, *spatial, channels) -> (combined_batch, *spatial, channels)
+    # (*batch, *spatial, channels) -> (combined_batch, *spatial, channels)
     batch_shape = inputs.shape[: -num_spatial - 1]
     spatial_shape = inputs.shape[-num_spatial - 1 : -1]
     input_channels = inputs.shape[-1]
@@ -1238,6 +1271,7 @@ class ConvTranspose(bx.Module):
         kernel_shape,
         self.kernel_init,
         metadata=self.kernel_metadata,
+        rng=self.rng,
     )
 
     # Normalize strides and dilations to tuples.
@@ -1279,11 +1313,13 @@ class ConvTranspose(bx.Module):
           (self.output_channels,),
           self.bias_init,
           metadata=self.bias_metadata,
+          rng=self.rng,
       )
       outputs = outputs + bias
 
     # Reshape output back to original batch shape.
-    # Output: (combined_batch, *out_spatial, out_channels) -> (*batch, *out_spatial, out_channels)
+    # (combined_batch, *out_spatial, out_channels)
+    # -> (*batch, *out_spatial, out_channels)
     out_spatial = outputs.shape[1:-1]
     outputs = outputs.reshape(
         batch_shape + out_spatial + (self.output_channels,)

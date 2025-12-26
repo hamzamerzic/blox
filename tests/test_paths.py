@@ -8,11 +8,12 @@ import jax.numpy as jnp
 def test_slash_in_module_name():
   """Verifies that module names can contain '/' characters."""
   graph = bx.Graph('root')
+  rng = bx.Rng(graph.child('rng'))
   # Module name with slash - was previously problematic.
-  layer = bx.Linear(graph.child('encoder/decoder'), output_size=10)
+  layer = bx.Linear(graph.child('encoder/decoder'), output_size=10, rng=rng)
 
   x = jnp.ones((2, 5))
-  params = bx.Params(bx.Rng(graph.child('rng')), seed=0)
+  params = rng.seed(bx.Params(), seed=0)
 
   y, params = layer(params, x)
   params = params.finalized()
@@ -26,6 +27,7 @@ def test_slash_in_module_name():
 def test_slash_in_variable_name():
   """Verifies that variable names can contain '/' characters."""
   graph = bx.Graph('root')
+  rng = bx.Rng(graph.child('rng'))
 
   class CustomModule(bx.Module):
 
@@ -42,7 +44,7 @@ def test_slash_in_variable_name():
   layer = CustomModule(graph.child('custom'))
 
   x = jnp.ones((2, 5))
-  params = bx.Params(bx.Rng(graph.child('rng')), seed=0)
+  params = rng.seed(bx.Params(), seed=0)
 
   _, params = layer(params, x)
   params = params.finalized()
@@ -54,6 +56,7 @@ def test_slash_in_variable_name():
 def test_special_characters_in_names():
   """Verifies various special characters work in module/variable names."""
   graph = bx.Graph('root')
+  rng = bx.Rng(graph.child('rng'))
 
   special_names = [
       'layer.1',
@@ -66,10 +69,10 @@ def test_special_characters_in_names():
   ]
 
   x = jnp.ones((2, 5))
-  params = bx.Params(bx.Rng(graph.child('rng')), seed=0)
+  params = rng.seed(bx.Params(), seed=0)
 
   for name in special_names:
-    layer = bx.Linear(graph.child(name), output_size=3)
+    layer = bx.Linear(graph.child(name), output_size=3, rng=rng)
     _, params = layer(params, x)
 
   params = params.finalized()
@@ -82,12 +85,13 @@ def test_special_characters_in_names():
 def test_nested_slashes():
   """Verifies deeply nested paths with slashes in names."""
   graph = bx.Graph('model/v1')
+  rng = bx.Rng(graph.child('rng'))
   child1 = graph.child('encoder/layer')
   child2 = child1.child('attention/head')
-  layer = bx.Linear(child2.child('proj/out'), output_size=5)
+  layer = bx.Linear(child2.child('proj/out'), output_size=5, rng=rng)
 
   x = jnp.ones((2, 3))
-  params = bx.Params(bx.Rng(graph.child('rng')), seed=0)
+  params = rng.seed(bx.Params(), seed=0)
 
   _, params = layer(params, x)
   params = params.finalized()
@@ -106,10 +110,11 @@ def test_nested_slashes():
 def test_split_with_special_characters():
   """Verifies split() works correctly with special character names."""
   graph = bx.Graph('root')
-  layer = bx.Linear(graph.child('layer/1'), output_size=3)
+  rng = bx.Rng(graph.child('rng'))
+  layer = bx.Linear(graph.child('layer/1'), output_size=3, rng=rng)
 
   x = jnp.ones((2, 5))
-  params = bx.Params(bx.Rng(graph.child('rng')), seed=0)
+  params = rng.seed(bx.Params(), seed=0)
 
   _, params = layer(params, x)
   params = params.finalized()
@@ -139,10 +144,11 @@ def test_graph_repr_with_special_characters():
 def test_custom_split():
   """Verifies Graph repr handles special characters correctly."""
   graph = bx.Graph('model/v1')
-  layer = bx.Linear(graph.child('layer/1'), output_size=3)
+  rng = bx.Rng(graph.child('rng'))
+  layer = bx.Linear(graph.child('layer/1'), output_size=3, rng=rng)
 
   x = jnp.ones((2, 5))
-  params = bx.Params(bx.Rng(graph.child('rng')), seed=0)
+  params = rng.seed(bx.Params(), seed=0)
   _, params = layer(params, x)
   params = params.finalized()
 

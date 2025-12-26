@@ -7,11 +7,14 @@ import pytest
 def test_conv1d_shapes():
   """Verifies 1D convolution output shapes."""
   graph = bx.Graph('root')
-  conv = bx.Conv(graph.child('conv'), output_channels=16, kernel_size=3)
+  rng = bx.Rng(graph.child('rng'))
+  conv = bx.Conv(
+      graph.child('conv'), output_channels=16, kernel_size=3, rng=rng
+  )
 
   # [batch, length, channels]
   x = jnp.ones((2, 10, 8))
-  params = bx.Params(bx.Rng(graph.child('rng')), seed=0)
+  params = rng.seed(bx.Params(), seed=0)
 
   y, params = conv(params, x)
 
@@ -22,11 +25,14 @@ def test_conv1d_shapes():
 def test_conv2d_shapes():
   """Verifies 2D convolution output shapes."""
   graph = bx.Graph('root')
-  conv = bx.Conv(graph.child('conv'), output_channels=32, kernel_size=(3, 3))
+  rng = bx.Rng(graph.child('rng'))
+  conv = bx.Conv(
+      graph.child('conv'), output_channels=32, kernel_size=(3, 3), rng=rng
+  )
 
   # [batch, height, width, channels]
   x = jnp.ones((2, 28, 28, 3))
-  params = bx.Params(bx.Rng(graph.child('rng')), seed=0)
+  params = rng.seed(bx.Params(), seed=0)
 
   y, params = conv(params, x)
 
@@ -37,15 +43,17 @@ def test_conv2d_shapes():
 def test_conv_valid_padding():
   """Verifies VALID padding reduces spatial dimensions."""
   graph = bx.Graph('root')
+  rng = bx.Rng(graph.child('rng'))
   conv = bx.Conv(
       graph.child('conv'),
       output_channels=16,
       kernel_size=(3, 3),
+      rng=rng,
       padding='VALID',
   )
 
   x = jnp.ones((2, 28, 28, 8))
-  params = bx.Params(bx.Rng(graph.child('rng')), seed=0)
+  params = rng.seed(bx.Params(), seed=0)
 
   y, _ = conv(params, x)
 
@@ -56,12 +64,17 @@ def test_conv_valid_padding():
 def test_conv_strides():
   """Verifies strided convolution reduces spatial dimensions."""
   graph = bx.Graph('root')
+  rng = bx.Rng(graph.child('rng'))
   conv = bx.Conv(
-      graph.child('conv'), output_channels=16, kernel_size=(3, 3), strides=2
+      graph.child('conv'),
+      output_channels=16,
+      kernel_size=(3, 3),
+      rng=rng,
+      strides=2,
   )
 
   x = jnp.ones((2, 28, 28, 8))
-  params = bx.Params(bx.Rng(graph.child('rng')), seed=0)
+  params = rng.seed(bx.Params(), seed=0)
 
   y, _ = conv(params, x)
 
@@ -72,16 +85,18 @@ def test_conv_strides():
 def test_conv_dilations():
   """Verifies dilated convolution (atrous convolution)."""
   graph = bx.Graph('root')
+  rng = bx.Rng(graph.child('rng'))
   conv = bx.Conv(
       graph.child('conv'),
       output_channels=16,
       kernel_size=(3, 3),
+      rng=rng,
       kernel_dilation=2,
       padding='VALID',
   )
 
   x = jnp.ones((2, 28, 28, 8))
-  params = bx.Params(bx.Rng(graph.child('rng')), seed=0)
+  params = rng.seed(bx.Params(), seed=0)
 
   y, _ = conv(params, x)
 
@@ -93,15 +108,17 @@ def test_conv_dilations():
 def test_conv_no_bias():
   """Verifies convolution without bias."""
   graph = bx.Graph('root')
+  rng = bx.Rng(graph.child('rng'))
   conv = bx.Conv(
       graph.child('conv'),
       output_channels=16,
       kernel_size=(3, 3),
+      rng=rng,
       use_bias=False,
   )
 
   x = jnp.ones((2, 8, 8, 4))
-  params = bx.Params(bx.Rng(graph.child('rng')), seed=0)
+  params = rng.seed(bx.Params(), seed=0)
 
   _, params = conv(params, x)
   params = params.finalized()
@@ -113,10 +130,13 @@ def test_conv_no_bias():
 def test_conv_kernel_shape():
   """Verifies kernel shape is correct."""
   graph = bx.Graph('root')
-  conv = bx.Conv(graph.child('conv'), output_channels=32, kernel_size=(5, 5))
+  rng = bx.Rng(graph.child('rng'))
+  conv = bx.Conv(
+      graph.child('conv'), output_channels=32, kernel_size=(5, 5), rng=rng
+  )
 
   x = jnp.ones((2, 16, 16, 8))
-  params = bx.Params(bx.Rng(graph.child('rng')), seed=0)
+  params = rng.seed(bx.Params(), seed=0)
 
   _, params = conv(params, x)
   params = params.finalized()
@@ -134,10 +154,12 @@ def test_conv_learning():
   9 input values, so the optimal kernel has values summing to the target.
   """
   graph = bx.Graph('root')
+  rng = bx.Rng(graph.child('rng'))
   conv = bx.Conv(
       graph.child('conv'),
       output_channels=1,
       kernel_size=(3, 3),
+      rng=rng,
       use_bias=False,
       padding='VALID',
   )
@@ -146,7 +168,7 @@ def test_conv_learning():
   x = jnp.ones((1, 8, 8, 1))
   # Target: constant 5.0 for all output pixels (6x6 with VALID padding).
   target = jnp.ones((1, 6, 6, 1)) * 5.0
-  params = bx.Params(bx.Rng(graph.child('rng')), seed=42)
+  params = rng.seed(bx.Params(), seed=42)
 
   # Initialize.
   _, params = conv(params, x)
@@ -177,11 +199,14 @@ def test_conv_learning():
 def test_conv_invalid_rank():
   """Verifies error when input has too few dimensions."""
   graph = bx.Graph('root')
-  conv = bx.Conv(graph.child('conv'), output_channels=16, kernel_size=(3, 3))
+  rng = bx.Rng(graph.child('rng'))
+  conv = bx.Conv(
+      graph.child('conv'), output_channels=16, kernel_size=(3, 3), rng=rng
+  )
 
   # 2D conv needs at least 3 dims (height, width, channels), but only 2 given.
   x = jnp.ones((10, 8))
-  params = bx.Params(bx.Rng(graph.child('rng')), seed=0)
+  params = rng.seed(bx.Params(), seed=0)
 
   with pytest.raises(ValueError, match='Expected input rank'):
     conv(params, x)
@@ -190,11 +215,14 @@ def test_conv_invalid_rank():
 def test_conv_unbatched():
   """Verifies conv works without batch dimension."""
   graph = bx.Graph('root')
-  conv = bx.Conv(graph.child('conv'), output_channels=16, kernel_size=(3, 3))
+  rng = bx.Rng(graph.child('rng'))
+  conv = bx.Conv(
+      graph.child('conv'), output_channels=16, kernel_size=(3, 3), rng=rng
+  )
 
   # No batch dimension: (height, width, channels)
   x = jnp.ones((8, 8, 4))
-  params = bx.Params(bx.Rng(graph.child('rng')), seed=0)
+  params = rng.seed(bx.Params(), seed=0)
 
   y, params = conv(params, x)
   assert y.shape == (8, 8, 16)
@@ -203,13 +231,15 @@ def test_conv_unbatched():
 def test_conv_batched_unbatched_equivalence():
   """Verifies unbatched output matches batched output for batch_size=1."""
   graph = bx.Graph('root')
-  conv = bx.Conv(graph.child('conv'), output_channels=16, kernel_size=(3, 3))
   rng = bx.Rng(graph.child('rng'))
+  conv = bx.Conv(
+      graph.child('conv'), output_channels=16, kernel_size=(3, 3), rng=rng
+  )
 
   x_unbatched = jnp.ones((8, 8, 4))
   x_batched = x_unbatched[None, ...]  # Add batch dimension.
 
-  params = bx.Params(rng, seed=0)
+  params = rng.seed(bx.Params(), seed=0)
   y_unbatched, params = conv(params, x_unbatched)
 
   # Re-run with same params for batched version.
@@ -223,11 +253,14 @@ def test_conv_batched_unbatched_equivalence():
 def test_conv_multiple_batch_dims():
   """Verifies conv works with multiple batch dimensions."""
   graph = bx.Graph('root')
-  conv = bx.Conv(graph.child('conv'), output_channels=16, kernel_size=(3, 3))
+  rng = bx.Rng(graph.child('rng'))
+  conv = bx.Conv(
+      graph.child('conv'), output_channels=16, kernel_size=(3, 3), rng=rng
+  )
 
   # Multiple batch dims: (batch1, batch2, height, width, channels)
   x = jnp.ones((2, 3, 8, 8, 4))
-  params = bx.Params(bx.Rng(graph.child('rng')), seed=0)
+  params = rng.seed(bx.Params(), seed=0)
 
   y, _ = conv(params, x)
   assert y.shape == (2, 3, 8, 8, 16)
@@ -236,11 +269,14 @@ def test_conv_multiple_batch_dims():
 def test_conv3d_shapes():
   """Verifies 3D convolution output shapes."""
   graph = bx.Graph('root')
-  conv = bx.Conv(graph.child('conv'), output_channels=16, kernel_size=(3, 3, 3))
+  rng = bx.Rng(graph.child('rng'))
+  conv = bx.Conv(
+      graph.child('conv'), output_channels=16, kernel_size=(3, 3, 3), rng=rng
+  )
 
   # [batch, depth, height, width, channels]
   x = jnp.ones((2, 8, 8, 8, 4))
-  params = bx.Params(bx.Rng(graph.child('rng')), seed=0)
+  params = rng.seed(bx.Params(), seed=0)
 
   y, _ = conv(params, x)
 
@@ -250,16 +286,18 @@ def test_conv3d_shapes():
 def test_conv_depthwise():
   """Verifies depthwise convolution (feature_group_count = input_channels)."""
   graph = bx.Graph('root')
+  rng = bx.Rng(graph.child('rng'))
   input_channels = 8
   conv = bx.Conv(
       graph.child('conv'),
       output_channels=8,  # Must equal input_channels for depthwise.
       kernel_size=(3, 3),
+      rng=rng,
       feature_group_count=8,  # One filter per input channel.
   )
 
   x = jnp.ones((2, 16, 16, input_channels))
-  params = bx.Params(bx.Rng(graph.child('rng')), seed=0)
+  params = rng.seed(bx.Params(), seed=0)
 
   y, params = conv(params, x)
   params = params.finalized()
@@ -274,16 +312,18 @@ def test_conv_depthwise():
 def test_conv_transpose_2d_shapes():
   """Verifies 2D ConvTranspose output shapes."""
   graph = bx.Graph('root')
+  rng = bx.Rng(graph.child('rng'))
   conv_t = bx.ConvTranspose(
       graph.child('conv_t'),
       output_channels=3,
       kernel_size=(3, 3),
+      rng=rng,
       strides=(2, 2),
   )
 
   # Input: [batch, height, width, channels]
   x = jnp.ones((1, 14, 14, 32))
-  params = bx.Params(bx.Rng(graph.child('rng')), seed=0)
+  params = rng.seed(bx.Params(), seed=0)
 
   y, _ = conv_t(params, x)
 
@@ -294,17 +334,19 @@ def test_conv_transpose_2d_shapes():
 def test_conv_transpose_valid_padding():
   """Verifies ConvTranspose with VALID padding."""
   graph = bx.Graph('root')
+  rng = bx.Rng(graph.child('rng'))
   conv_t = bx.ConvTranspose(
       graph.child('conv_t'),
       output_channels=1,
       kernel_size=(3, 3),
+      rng=rng,
       strides=(1, 1),
       padding='VALID',
   )
 
   # Input: [batch, height, width, channels]
   x = jnp.ones((1, 2, 2, 16))
-  params = bx.Params(bx.Rng(graph.child('rng')), seed=0)
+  params = rng.seed(bx.Params(), seed=0)
 
   y, _ = conv_t(params, x)
 
@@ -316,12 +358,13 @@ def test_conv_transpose_valid_padding():
 def test_conv_transpose_kernel_shape():
   """Verifies ConvTranspose kernel shape."""
   graph = bx.Graph('root')
+  rng = bx.Rng(graph.child('rng'))
   conv_t = bx.ConvTranspose(
-      graph.child('conv_t'), output_channels=3, kernel_size=(4, 4)
+      graph.child('conv_t'), output_channels=3, kernel_size=(4, 4), rng=rng
   )
 
   x = jnp.ones((1, 8, 8, 16))
-  params = bx.Params(bx.Rng(graph.child('rng')), seed=0)
+  params = rng.seed(bx.Params(), seed=0)
 
   _, params = conv_t(params, x)
   params = params.finalized()
@@ -334,13 +377,18 @@ def test_conv_transpose_kernel_shape():
 def test_conv_transpose_1d_shapes():
   """Verifies 1D ConvTranspose output shapes."""
   graph = bx.Graph('root')
+  rng = bx.Rng(graph.child('rng'))
   conv_t = bx.ConvTranspose(
-      graph.child('conv_t'), output_channels=8, kernel_size=3, strides=2
+      graph.child('conv_t'),
+      output_channels=8,
+      kernel_size=3,
+      rng=rng,
+      strides=2,
   )
 
   # [batch, length, channels]
   x = jnp.ones((1, 10, 4))
-  params = bx.Params(bx.Rng(graph.child('rng')), seed=0)
+  params = rng.seed(bx.Params(), seed=0)
 
   y, _ = conv_t(params, x)
 
@@ -351,16 +399,18 @@ def test_conv_transpose_1d_shapes():
 def test_conv_transpose_3d_shapes():
   """Verifies 3D ConvTranspose output shapes."""
   graph = bx.Graph('root')
+  rng = bx.Rng(graph.child('rng'))
   conv_t = bx.ConvTranspose(
       graph.child('conv_t'),
       output_channels=4,
       kernel_size=(2, 2, 2),
+      rng=rng,
       strides=(2, 2, 2),
   )
 
   # [batch, depth, height, width, channels]
   x = jnp.ones((1, 4, 4, 4, 2))
-  params = bx.Params(bx.Rng(graph.child('rng')), seed=0)
+  params = rng.seed(bx.Params(), seed=0)
 
   y, _ = conv_t(params, x)
 
@@ -371,13 +421,18 @@ def test_conv_transpose_3d_shapes():
 def test_conv_transpose_unbatched():
   """Verifies conv_transpose works without batch dimension."""
   graph = bx.Graph('root')
+  rng = bx.Rng(graph.child('rng'))
   conv_t = bx.ConvTranspose(
-      graph.child('conv_t'), output_channels=8, kernel_size=(3, 3), strides=2
+      graph.child('conv_t'),
+      output_channels=8,
+      kernel_size=(3, 3),
+      rng=rng,
+      strides=2,
   )
 
   # No batch dimension: (height, width, channels)
   x = jnp.ones((4, 4, 4))
-  params = bx.Params(bx.Rng(graph.child('rng')), seed=0)
+  params = rng.seed(bx.Params(), seed=0)
 
   y, _ = conv_t(params, x)
   assert y.shape == (8, 8, 8)
@@ -386,15 +441,19 @@ def test_conv_transpose_unbatched():
 def test_conv_transpose_batched_unbatched_equivalence():
   """Verifies unbatched output matches batched output for batch_size=1."""
   graph = bx.Graph('root')
-  conv_t = bx.ConvTranspose(
-      graph.child('conv_t'), output_channels=8, kernel_size=(3, 3), strides=2
-  )
   rng = bx.Rng(graph.child('rng'))
+  conv_t = bx.ConvTranspose(
+      graph.child('conv_t'),
+      output_channels=8,
+      kernel_size=(3, 3),
+      rng=rng,
+      strides=2,
+  )
 
   x_unbatched = jnp.ones((4, 4, 4))
   x_batched = x_unbatched[None, ...]  # Add batch dimension.
 
-  params = bx.Params(rng, seed=0)
+  params = rng.seed(bx.Params(), seed=0)
   y_unbatched, params = conv_t(params, x_unbatched)
 
   # Re-run with same params for batched version.
@@ -408,13 +467,18 @@ def test_conv_transpose_batched_unbatched_equivalence():
 def test_conv_transpose_multiple_batch_dims():
   """Verifies conv_transpose works with multiple batch dimensions."""
   graph = bx.Graph('root')
+  rng = bx.Rng(graph.child('rng'))
   conv_t = bx.ConvTranspose(
-      graph.child('conv_t'), output_channels=8, kernel_size=(3, 3), strides=2
+      graph.child('conv_t'),
+      output_channels=8,
+      kernel_size=(3, 3),
+      rng=rng,
+      strides=2,
   )
 
   # Multiple batch dims: (batch1, batch2, height, width, channels)
   x = jnp.ones((2, 3, 4, 4, 4))
-  params = bx.Params(bx.Rng(graph.child('rng')), seed=0)
+  params = rng.seed(bx.Params(), seed=0)
 
   y, _ = conv_t(params, x)
   assert y.shape == (2, 3, 8, 8, 8)
