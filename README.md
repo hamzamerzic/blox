@@ -22,11 +22,11 @@ Most JAX neural network libraries try to force Object-Oriented paradigms to make
 
 ## 🎯 Who is blox for?
 
-**blox** is designed for two audiences:
+**blox** is mainly designed for:
 
-* **Students and educators** who want to learn JAX without having to learn a ton of new abstractions. With **blox**, what you see is what you get: pure functions, explicit state, and no hidden magic. This makes it an excellent educational tool for understanding how neural networks actually work at the JAX level.
+* **Students** who want to learn JAX without having to learn a ton of additional abstractions. With **blox**, what you see is what you get: pure functions, explicit state, and no hidden magic. This makes it an excellent educational tool for understanding how neural networks actually work at the JAX level.
 
-* **Practitioners** who want full control over the execution stack. If you're tired of fighting frameworks that hide important details, **blox** gives you complete transparency while still providing the conveniences you need for building real models.
+* **Practitioners** who want full control over the execution stack. If you're tired of fighting frameworks that hide important details, **blox** gives you complete transparency while still providing the conveniences you need for building high performance models.
 
 ## ⚡ Core Principles & Features
 
@@ -405,7 +405,7 @@ rng.seed(params, counter=0)
 params = rng.seed(params, counter=0)
 ```
 
-When using `jax.vmap` or `jax.shard_map`, remember that the same `params` (and RNG state) would produce identical random numbers on each device/batch element unless you use `auto_fold_in_axes=True` (the default) on your `Rng` module. See the [Batching & Parallel RNG](#-batching--parallel-rng-vmap--shard_map) section for details.
+Random keys generated under `jax.vmap` or `jax.shard_map` will be identical for each batch element/device unless you use `auto_fold_in_axes=True` (the default) on your `Rng` module. `axis_name` must also be specified for every `vmap` that wraps code using `Rng` to generate new random keys. See the [Batching & Parallel RNG](#-batching--parallel-rng-vmap--shard_map) section for more information.
 
 ## ⚖️ Why blox?
 

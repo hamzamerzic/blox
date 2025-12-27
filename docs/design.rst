@@ -29,9 +29,14 @@ The Params
 
 A ``Params`` object is a flat, immutable container holding all state (weights, RNG keys, batch stats). It is keyed by the paths defined in the Graph.
 
+The Rng
+~~~~~~~
+
+An ``Rng`` module handles randomness. It is passed to modules on construction and stores its state (seed, counter) in the ``Params`` container. Modules that need randomness (e.g., ``Dropout``) accept an ``Rng`` on construction and call it to get random keys.
+
 Key Features
 ------------
 
 *   **Native JAX Compatibility:** Works with ``jax.jit``, ``jax.grad``, ``jax.vmap``, ``jax.shard_map`` out of the box.
 *   **Lazy Initialization:** Define structure abstractly, run a forward pass to materialize parameters.
-*   **Structural RNG:** Randomness is handled as part of the ``Params`` structure. Getting a new key returns an updated ``Params`` object.
+*   **Structural RNG:** ``Rng`` is passed to modules on construction. It automatically folds in ``vmap``/``shard_map`` axes to produce different random values per batch element or device.
