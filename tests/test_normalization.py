@@ -46,7 +46,7 @@ def test_layernorm_learnable_params():
   params = rng.seed(bx.Params(), seed=0)
 
   _, params = ln(params, x)
-  params = params.finalized()
+  params = params.locked()
 
   assert ('root', 'ln', 'scale') in params._data
   assert ('root', 'ln', 'bias') in params._data
@@ -114,7 +114,7 @@ def test_batchnorm_training_vs_inference():
 
   # Training: uses batch statistics.
   y1, params = bn(params, batch1, is_training=True)
-  params = params.finalized()
+  params = params.locked()
 
   # The output should be normalized using batch1's statistics.
   mean1 = jnp.mean(batch1, axis=0)
@@ -146,7 +146,7 @@ def test_batchnorm_running_stats_update():
 
   # Initialize.
   _, params = bn(params, x, is_training=True)
-  params = params.finalized()
+  params = params.locked()
 
   # Get initial running stats (after first update from init zeros/ones).
   initial_mean = params._data[('root', 'bn', 'running_mean')].value
@@ -181,7 +181,7 @@ def test_batchnorm_learnable_params():
   params = rng.seed(bx.Params(), seed=0)
 
   _, params = bn(params, x, is_training=True)
-  params = params.finalized()
+  params = params.locked()
 
   assert ('root', 'bn', 'scale') in params._data
   assert ('root', 'bn', 'bias') in params._data

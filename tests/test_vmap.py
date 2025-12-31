@@ -155,7 +155,7 @@ def test_vmap_init_without_auto_fold_produces_same_params():
   def init(x):
     params = rng.seed(bx.Params(), seed=42)
     _, params = linear(params, x)
-    return params.finalized()
+    return params.locked()
 
   params_batch = jax.vmap(init, axis_name='batch')(jnp.ones((4, 1, 3)))
 
@@ -180,7 +180,7 @@ def test_nested_vmap_mlp_apply():
     x, params = layer1(params, x)
     x, params = dropout(params, x, is_training=False)
     _, params = layer2(params, x)
-    return params.finalized()
+    return params.locked()
 
   x_sample = jnp.ones((1, 16))
   params = init_model(x_sample)
@@ -320,7 +320,7 @@ def test_vmap_with_axis_name_init_produces_same_params():
     params = rng.seed(bx.Params(), seed=42)
     _, params = linear(params, x)
     key, params = rng(params)
-    return key, params.finalized()
+    return key, params.locked()
 
   # out_axes=(0, None) - keys batched, params must be identical (JAX will fail
   # if params differ across batch elements).
@@ -382,7 +382,7 @@ def test_unnamed_vmap_works_without_rng_calls():
   def init(x):
     params = rng.seed(bx.Params(), seed=42)
     _, params = linear(params, x)
-    return params.finalized()
+    return params.locked()
 
   params = init(jnp.ones((1, 3)))
 

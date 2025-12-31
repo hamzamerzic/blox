@@ -23,7 +23,7 @@ from __future__ import annotations
 import abc
 import functools
 import inspect
-from collections.abc import ItemsView, KeysView, ValuesView
+from collections.abc import ItemsView, Iterator, KeysView, ValuesView
 from typing import Any, Callable, Generic, TypeVar, cast
 
 import chex
@@ -85,6 +85,8 @@ class Graph:
     self.name = name
     self.path: Path = (name,)
     self._children: dict[str, Graph] = {}
+    self._parent: Graph | None = None
+    self._module: Module | None = None
     # Metadata storage for visualization or auxiliary info.
     self.metadata: dict[str, Any] = {}
     # Track if this node is the root of the hierarchy.
@@ -131,8 +133,65 @@ class Graph:
 
   def _set_parent(self, parent: Graph) -> None:
     self.path = parent.path + (self.name,)
+    self._parent = parent
     # This node is now part of a hierarchy, so it is no longer a root.
     self._is_root = False
+
+  def _bind(self, module: 'Module') -> None:
+    """Registers a module with this graph node.
+
+    Called automatically by Module.__init__. Each graph node can only be
+    bound to one module.
+
+    Args:
+      module: The module to bind.
+
+    Raises:
+      ValueError: If this node is already bound to a module.
+    """
+    if self._module is not None:
+      raise ValueError(
+          f"Graph node '{self.path}' already bound to {self._module}. "
+          f'Cannot bind {module}.'
+      )
+    self._module = module
+
+  @property
+  def parent(self) -> Graph | None:
+    """Returns the parent graph node, or None if this is a root."""
+    return self._parent
+
+  @property
+  def root(self) -> Graph:
+    """Returns the root of this graph hierarchy."""
+    node = self
+    while node._parent is not None:
+      node = node._parent
+    return node
+
+  @property
+  def module(self) -> 'Module | None':
+    """Returns the module bound to this node, if any."""
+    return self._module
+
+  def walk(self) -> Iterator[tuple[Path, 'Module']]:
+    """Recursively yields (path, module) for all descendant modules.
+
+    Iterates depth-first through all children, yielding only nodes that have
+    a bound module. Does not include self.
+
+    Yields:
+      Tuples of (path, module) for each descendant with a bound module.
+
+    Example:
+      for path, module in graph.walk():
+        if isinstance(module, bx.Linear):
+          print(f'Found Linear at {path}')
+    """
+    for child in self._children.values():
+      if child._module is not None:
+        yield child.path, child._module
+      yield from child.walk()
 
   def __repr__(self) -> str:
     n_children = len(self._children)
@@ -235,7 +294,7 @@ class Params:
 
     # Forward pass creates parameters.
     _, params = model(params, x)
-    params = params.finalized()
+    params = params.locked()
 
     # Training loop.
     trainable, non_trainable = params.split()
@@ -244,37 +303,50 @@ class Params:
     params = trainable.merge(non_trainable)
   """
 
-  # ============================================================================
-  # Initialization
-  # ============================================================================
-
   def __init__(self) -> None:
     """Creates an empty parameter container."""
     self._data: dict[Path, Param] = {}
-    self._initialized: bool = False
-
-  # ============================================================================
-  # Properties
-  # ============================================================================
-
-  @property
-  def initialized(self) -> bool:
-    """True if finalize() has been called, preventing new parameter creation."""
-    return self._initialized
+    self._locked: bool = False
 
   # ============================================================================
   # Core API
   # ============================================================================
 
-  def finalized(self) -> 'Params':
-    """Returns finalized params that prevent new parameter creation.
+  @property
+  def is_locked(self) -> bool:
+    """Returns True if params are locked (no new parameters can be added)."""
+    return self._locked
 
-    After finalization, attempting to create new parameters via get_param
+  def locked(self) -> 'Params':
+    """Returns locked params that prevent new parameter creation.
+
+    After locking, attempting to create new parameters via get_param
     will raise KeyError. This catches bugs where parameter names change
     between training runs.
     """
     p = self._clone()
-    p._initialized = True
+    p._locked = True
+    return p
+
+  def unlocked(self) -> 'Params':
+    """Returns unlocked params that allow new parameter creation.
+
+    Use this when you need to add parameters after initial locking,
+    such as adding LoRA adapters to a pretrained model.
+
+    Example:
+      # Load pretrained model.
+      params = load_pretrained()
+      params = params.locked()
+
+      # Later, add LoRA.
+      params = params.unlocked()
+      apply_lora(model)
+      _, params = model(params, dummy_input)  # Initialize LoRA params.
+      params = params.locked()
+    """
+    p = self._clone()
+    p._locked = False
     return p
 
   def split(
@@ -319,7 +391,7 @@ class Params:
     """Combines this container with another.
 
     Parameters from `other` override those in `self` if paths conflict.
-    Both containers must have the same initialized state.
+    Both containers must have the same locked state.
 
     Args:
       other: Another Params container to merge in.
@@ -328,11 +400,11 @@ class Params:
       A new merged Params container.
 
     Raises:
-      ValueError: If initialized state doesn't match.
+      ValueError: If locked state doesn't match.
     """
-    if self.initialized != other.initialized:
+    if self.is_locked != other.is_locked:
       raise ValueError(
-          f'Initialized mismatch: {self.initialized} vs {other.initialized}.'
+          f'Locked mismatch: {self.is_locked} vs {other.is_locked}.'
       )
 
     p = self._clone()
@@ -358,6 +430,32 @@ class Params:
     if key not in self._data:
       raise KeyError(f"Path '{key}' not found.")
     return self._data[key]
+
+  def __setitem__(self, key: Path, param: Param) -> None:
+    """Sets a Param at the given path.
+
+    This mutates the Params in place. For functional style, use _set().
+
+    Args:
+      key: Tuple path like ('net', 'linear', 'kernel').
+      param: A Param object to store.
+
+    Raises:
+      RuntimeError: If params are locked.
+      TypeError: If param is not a Param instance.
+
+    Example:
+      # Load pretrained weights directly.
+      params = bx.Params()
+      params[('net', 'linear', 'kernel')] = bx.Param(weights, trainable=True)
+    """
+    if self._locked:
+      raise RuntimeError(
+          'Cannot set params after locking. Use unlocked() first.'
+      )
+    if not isinstance(param, Param):
+      raise TypeError(f'Expected Param, got {type(param).__name__}')
+    self._data[key] = param
 
   def keys(self) -> KeysView[Path]:
     """Returns all parameter paths."""
@@ -386,8 +484,8 @@ class Params:
   def _get(
       self,
       path: Path,
-      shape: Shape,
-      init: Initializer,
+      shape: Shape | None,
+      init: Initializer | None,
       dtype: jnp.dtype = jnp.float32,
       trainable: bool = True,
       metadata: dict[str, Any] | None = None,
@@ -398,9 +496,16 @@ class Params:
     if path in self._data:
       return self._data[path].value, self
 
-    # Reject new params after finalization.
-    if self._initialized:
-      raise KeyError(f"Parameter '{path}' missing (params finalized).")
+    # Cannot create without shape/init.
+    if shape is None or init is None:
+      raise KeyError(
+          f"Parameter '{path}' not found. "
+          'To create a new parameter, provide shape and init.'
+      )
+
+    # Reject new params after locking.
+    if self._locked:
+      raise KeyError(f"Parameter '{path}' missing (params locked).")
 
     # Generate a key if rng is provided. We always generate a key (incrementing
     # the counter) even if the initializer doesn't need it. This ensures
@@ -423,20 +528,56 @@ class Params:
     new_p._data[path] = Param(val, trainable=trainable, metadata=metadata)
     return val, new_p
 
-  def _set(self, path: Path, value: Any) -> 'Params':
-    """Updates a parameter value. Use Module.set_param instead."""
+  def _set(
+      self,
+      path: Path,
+      value: jax.Array | None,
+      trainable: bool | None = None,
+      metadata: dict[str, Any] | None = None,
+  ) -> 'Params':
+    """Updates a parameter. Use Module.set_param instead.
+
+    Args:
+      path: Full tuple path to the parameter.
+      value: New value, or None to keep existing value.
+      trainable: New trainable flag, or None to keep existing.
+      metadata: Metadata to merge with existing, or None to keep existing.
+
+    Returns:
+      Updated Params container.
+
+    Raises:
+      KeyError: If path not found.
+      ValueError: If value is None and neither trainable nor metadata provided.
+    """
     if path not in self._data:
       raise KeyError(f"Path '{path}' not found.")
 
+    if value is None and trainable is None and metadata is None:
+      raise ValueError(
+          'At least one of value, trainable, or metadata must be provided.'
+      )
+
     p = self._clone()
-    p._data[path] = self._data[path].replace(value=value)
+    existing = self._data[path]
+
+    # Build updates dict.
+    updates: dict[str, Any] = {}
+    if value is not None:
+      updates['value'] = value
+    if trainable is not None:
+      updates['trainable'] = trainable
+    if metadata is not None:
+      updates['metadata'] = {**existing.metadata, **metadata}
+
+    p._data[path] = existing.replace(**updates)
     return p
 
   def _clone(self) -> 'Params':
     """Creates a shallow copy of this container."""
     p = cast(Params, object.__new__(Params))
     p._data = self._data.copy()
-    p._initialized = self._initialized
+    p._locked = self._locked
     return p
 
   # ============================================================================
@@ -445,7 +586,7 @@ class Params:
 
   def __repr__(self) -> str:
     abstract_data = jax.eval_shape(lambda x: x, self._data)
-    status = 'initialized' if self._initialized else 'uninitialized'
+    status = 'locked' if self._locked else 'unlocked'
     lines = [f'Params[{status}]({{']
     for k, v in abstract_data.items():
       lines.append(f'  {k}: {v},')
@@ -458,7 +599,7 @@ class Params:
 
   def tree_flatten(self) -> tuple[tuple[dict[Path, Param]], tuple[bool]]:
     """Flattens for JAX pytree operations."""
-    return (self._data,), (self._initialized,)
+    return (self._data,), (self._locked,)
 
   @classmethod
   def tree_unflatten(
@@ -469,7 +610,7 @@ class Params:
     """Unflattens from JAX pytree operations."""
     p = cast(Params, object.__new__(cls))
     p._data = children[0]
-    p._initialized = aux[0]
+    p._locked = aux[0]
     return p
 
 
@@ -519,10 +660,10 @@ class Module:
     linear = Linear(graph.child('linear'), output_size=32)
   """
 
-  # Temporary attributes used during __init__ to capture constructor arguments.
-  # Set by __init_subclass__ wrapper, deleted after flushing to graph metadata.
-  _blox_captured_args: dict[str, Any]
-  _blox_captured_type: str
+  # Instance attributes for constructor info (set by __init_subclass__ wrapper).
+  # Used by __repr__ and visualization.
+  _init_type: str
+  _init_args: dict[str, Any]
 
   def __init__(self, graph: Graph) -> None:
     """Binds this module to a graph node.
@@ -532,26 +673,21 @@ class Module:
         Must not be a root node - use `graph.child('name')` to create one.
 
     Raises:
-      ValueError: If graph is a root node or already owned by another module.
+      ValueError: If graph is a root node or already bound to another module.
     """
     if graph._is_root:
       raise ValueError(
           f"Cannot bind '{self.__class__.__name__}' to root graph node "
           f"'{graph.name}'. Use graph.child('name') to create a child node."
       )
-    if '__type__' in graph.metadata:
-      raise ValueError(
-          f"Graph node '{graph.name}' already owned by "
-          f"'{graph.metadata['__type__']}'. "
-          f"Did you forget to call graph.child('name')?"
-      )
+    graph._bind(self)
     self.graph = graph
 
   def __init_subclass__(cls, **kwargs: Any) -> None:
     """Wraps subclass __init__ to capture constructor arguments.
 
     This metaclass-like hook automatically captures constructor arguments
-    and stores them in the graph's metadata. This enables:
+    and stores them on the module instance. This enables:
     - Visualization (bx.display shows constructor args)
     - Serialization (can reconstruct modules from metadata)
     - Debugging (easy to inspect what was passed)
@@ -570,16 +706,16 @@ class Module:
     def wrapped_init(self: 'Module', *args: Any, **kwargs: Any) -> None:
       # Capture args only at the outermost class in inheritance chain.
       # This ensures child class args take precedence over parent class args.
-      should_capture = not hasattr(self, '_blox_captured_args')
+      should_capture = not hasattr(self, '_init_args')
       if should_capture:
         bound = sig.bind(self, *args, **kwargs)
         bound.apply_defaults()
-        self._blox_captured_args = {
+        self._init_args = {
             k: v
             for k, v in bound.arguments.items()
             if k not in {'self', 'graph', '__class__'}
         }
-        self._blox_captured_type = cls.__name__
+        self._init_type = cls.__name__
 
       original_init(self, *args, **kwargs)
 
@@ -589,13 +725,6 @@ class Module:
             f"Module '{cls.__name__}' failed to initialize. "
             'Did you forget to call super().__init__(graph)?'
         )
-
-      # Flush captured data to graph metadata.
-      if should_capture:
-        self.graph.metadata['__type__'] = self._blox_captured_type
-        self.graph.metadata.update(self._blox_captured_args)
-        del self._blox_captured_args
-        del self._blox_captured_type
 
     cls.__init__ = wrapped_init
 
@@ -607,8 +736,8 @@ class Module:
       self,
       params: Params,
       name: str,
-      shape: Shape,
-      init: Initializer,
+      shape: Shape | None = None,
+      init: Initializer | None = None,
       dtype: jnp.dtype = jnp.float32,
       trainable: bool = True,
       metadata: dict[str, Any] | None = None,
@@ -619,11 +748,14 @@ class Module:
     On first call, creates a new parameter using the initializer.
     On subsequent calls, returns the existing parameter value.
 
+    For existing parameters, shape and init can be omitted:
+      kernel, params = self.get_param(params, 'kernel')
+
     Args:
       params: The parameter container.
       name: Local parameter name (e.g., 'kernel', 'bias').
-      shape: Shape of the parameter tensor.
-      init: JAX initializer function.
+      shape: Shape of the parameter tensor. Required for new params.
+      init: JAX initializer function. Required for new params.
       dtype: Data type (default: float32).
       trainable: Whether gradients should be computed (default: True).
       metadata: Optional metadata dict. Common keys:
@@ -633,30 +765,61 @@ class Module:
     Returns:
       Tuple of (parameter_value, updated_params).
 
+    Raises:
+      KeyError: If param doesn't exist and shape/init not provided.
+
     Example:
+      # Creating a new parameter:
       kernel, params = self.get_param(
-          params, 'kernel', (in_size, out_size),
-          jax.nn.initializers.lecun_normal(),
+          params,
+          'kernel',
+          shape=(in_size, out_size),
+          init=jax.nn.initializers.lecun_normal(),
           rng=self.rng,
           metadata={'sharding': (None, 'model')}
       )
+
+      # Getting an existing parameter:
+      kernel, params = self.get_param(params, 'kernel')
     """
     return params._get(
         self.param_path(name), shape, init, dtype, trainable, metadata, rng
     )
 
-  def set_param(self, params: Params, name: str, value: Any) -> Params:
-    """Updates a parameter value in this module's namespace.
+  def set_param(
+      self,
+      params: Params,
+      name: str,
+      value: jax.Array | None,
+      trainable: bool | None = None,
+      metadata: dict[str, Any] | None = None,
+  ) -> Params:
+    """Updates a parameter in this module's namespace.
 
     Args:
       params: The parameter container.
       name: Local parameter name.
-      value: New value for the parameter.
+      value: New value for the parameter, or None to keep existing.
+      trainable: New trainable flag, or None to keep existing.
+      metadata: Metadata to merge with existing, or None to keep existing.
 
     Returns:
       Updated Params container.
+
+    Raises:
+      ValueError: If value is None and neither trainable nor metadata provided.
+
+    Example:
+      # Update just the value.
+      params = module.set_param(params, 'kernel', new_kernel)
+
+      # Freeze a parameter.
+      params = module.set_param(params, 'kernel', None, trainable=False)
+
+      # Add metadata.
+      params = module.set_param(params, 'kernel', None, metadata={'tag': 'lora'})
     """
-    return params._set(self.param_path(name), value)
+    return params._set(self.param_path(name), value, trainable, metadata)
 
   def param_path(self, name: str) -> Path:
     """Returns the full path for a parameter in this module's namespace.
@@ -680,15 +843,10 @@ class Module:
 
   def __repr__(self) -> str:
     """Returns a string showing the module type and constructor args."""
-    if hasattr(self, 'graph') and hasattr(self.graph, 'metadata'):
-      name = self.graph.metadata.get('__type__', self.__class__.__name__)
-      args = [
-          f'{k}={v!r}'
-          for k, v in self.graph.metadata.items()
-          if k != '__type__'
-      ]
-      return f"{name}({', '.join(args)})"
-    return f'{self.__class__.__name__}()'
+    name = getattr(self, '_init_type', self.__class__.__name__)
+    init_args = getattr(self, '_init_args', {})
+    args = [f'{k}={v!r}' for k, v in init_args.items()]
+    return f"{name}({', '.join(args)})"
 
   @abc.abstractmethod
   def __call__(
@@ -774,7 +932,7 @@ class Rng(Module):
 
     # Forward pass creates parameters.
     _, params = model(params, x)
-    params = params.finalized()
+    params = params.locked()
 
   Modules that need randomness should accept an Rng on construction:
 
@@ -1069,7 +1227,7 @@ def dynamic_scan(
   for x in leaves:
     chex.assert_axis_dimension(x, axis=1, expected=T)
 
-  if not params.initialized:
+  if not params.is_locked:
     return static_scan(
         step_fn, params, inputs, prev_state, is_reset, is_training
     )
@@ -1256,8 +1414,8 @@ class RecurrenceBase(SequenceBase[InputsT, StateT, OutputsT, ResetT]):
     """Processes a sequence by scanning over __call__.
 
     This method automatically handles initialization: if parameters are not
-    yet initialized, it forces a single-step execution expanded to the full
-    sequence length to safely create parameters without violating JAX scan
+    yet locked (initialized), it forces a single-step execution expanded to the
+    full sequence length to safely create parameters without violating JAX scan
     invariants.
 
     Args:

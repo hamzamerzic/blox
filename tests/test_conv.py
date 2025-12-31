@@ -121,7 +121,7 @@ def test_conv_no_bias():
   params = rng.seed(bx.Params(), seed=0)
 
   _, params = conv(params, x)
-  params = params.finalized()
+  params = params.locked()
 
   assert ('root', 'conv', 'kernel') in params._data
   assert ('root', 'conv', 'bias') not in params._data
@@ -139,7 +139,7 @@ def test_conv_kernel_shape():
   params = rng.seed(bx.Params(), seed=0)
 
   _, params = conv(params, x)
-  params = params.finalized()
+  params = params.locked()
 
   # Kernel shape: (kernel_h, kernel_w, in_features, out_features)
   kernel_shape = params._data[('root', 'conv', 'kernel')].value.shape
@@ -172,7 +172,7 @@ def test_conv_learning():
 
   # Initialize.
   _, params = conv(params, x)
-  params = params.finalized()
+  params = params.locked()
 
   @jax.jit
   def step(p):
@@ -300,7 +300,7 @@ def test_conv_depthwise():
   params = rng.seed(bx.Params(), seed=0)
 
   y, params = conv(params, x)
-  params = params.finalized()
+  params = params.locked()
 
   assert y.shape == (2, 16, 16, 8)
 
@@ -367,7 +367,7 @@ def test_conv_transpose_kernel_shape():
   params = rng.seed(bx.Params(), seed=0)
 
   _, params = conv_t(params, x)
-  params = params.finalized()
+  params = params.locked()
 
   # Kernel shape for ConvTranspose: (kernel_h, kernel_w, output_channels, input_channels)
   kernel_shape = params._data[('root', 'conv_t', 'kernel')].value.shape

@@ -38,7 +38,7 @@ def test_gru_reset_logic():
   # Initialization pass
   initial_state, params = gru.initial_state(params, inputs)
   (_, _), params = gru.apply(params, inputs, initial_state)
-  params = params.finalized()
+  params = params.locked()
 
   # Reset at t=1.
   reset = jnp.array([[False, True, False]])
@@ -65,7 +65,7 @@ def test_gru_static_vs_dynamic():
   # Initialization
   state, params = gru.initial_state(params, inputs)
   (_, _), params = gru.apply(params, inputs, state)
-  params = params.finalized()
+  params = params.locked()
 
   # Dynamic
   gru.is_static = False
@@ -152,7 +152,7 @@ def test_lstm_static_vs_dynamic():
   # Initialization pass using apply().
   state, params = lstm.initial_state(params, inputs)
   (_, _), params = lstm.apply(params, inputs, state)
-  params = params.finalized()
+  params = params.locked()
 
   # Run dynamic (jax.lax.scan).
   lstm.is_static = False
@@ -178,7 +178,7 @@ def test_lstm_reset_logic():
   # Initialization pass using apply().
   initial_state, params = lstm.initial_state(params, inputs)
   (_, _), params = lstm.apply(params, inputs, initial_state)
-  params = params.finalized()
+  params = params.locked()
 
   # Reset at t=1.
   reset = jnp.array([[False, True, False]])

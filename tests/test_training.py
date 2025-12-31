@@ -29,7 +29,7 @@ def test_rng_updates_during_training():
   _, params = model(params, x)
 
   # NOW we finalize, to prevent accidental creation during training.
-  params = params.finalized()
+  params = params.locked()
 
   initial_counter = params._data[counter_path].value
 
@@ -149,7 +149,7 @@ def test_checkpoint_produces_correct_gradients():
   # Initialize params by running forward.
   params = rng.seed(bx.Params(), seed=42)
   _, params = forward(params, x)
-  params = params.finalized()
+  params = params.locked()
 
   trainable, non_trainable = params.split()
 
@@ -219,7 +219,7 @@ def test_checkpoint_with_dropout():
   # Initialize params by running forward.
   params = rng.seed(bx.Params(), seed=42)
   _, params = forward(params, x)
-  params = params.finalized()
+  params = params.locked()
 
   trainable, non_trainable = params.split()
 
@@ -318,7 +318,7 @@ def test_rng_reseed_pattern():
   _, params = rng(params)
   _, params = rng(params)
   _, params = rng(params)
-  params = params.finalized()
+  params = params.locked()
 
   counter_before = rng.get_counter(params)
   assert counter_before == 3
@@ -407,7 +407,7 @@ def test_params_len_and_contains():
   x = jnp.ones((2, 3))
   params = rng.seed(bx.Params(), seed=42)
   _, params = linear(params, x)
-  params = params.finalized()
+  params = params.locked()
 
   # __len__ returns number of parameters.
   assert len(params) == 4  # kernel, bias, seed, counter

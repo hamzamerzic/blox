@@ -21,7 +21,7 @@ def test_linear_shapes():
   assert y.shape == (2, 10)
 
   # Check params existed.
-  frozen = params.finalized()
+  frozen = params.locked()
   # Path is ('root', 'linear', 'kernel') because graph was "root" -> child("linear").
   # Note: Access .value because _data stores Param objects.
   kernel_shape = frozen._data[('root', 'linear', 'kernel')].value.shape
@@ -47,7 +47,7 @@ def test_linear_learning():
 
   # Initialize.
   _, params = layer(params, x)
-  frozen_params = params.finalized()
+  frozen_params = params.locked()
 
   # Train step.
   @jax.jit
@@ -163,3 +163,237 @@ def test_sequential_lambda():
 
   y, _ = model(params, x)
   assert jnp.allclose(y, x * 2)
+
+
+# =============================================================================
+# set_param Tests
+# =============================================================================
+
+
+def test_set_param_value():
+  """Verifies set_param can update parameter values."""
+  graph = bx.Graph('root')
+  rng = bx.Rng(graph.child('rng'))
+  layer = bx.Linear(graph.child('linear'), output_size=3, rng=rng)
+
+  x = jnp.ones((2, 5))
+  params = rng.seed(bx.Params(), seed=0)
+  _, params = layer(params, x)
+  params = params.locked()
+
+  # Update kernel with new values.
+  new_kernel = jnp.ones((5, 3))
+  params = layer.set_param(params, 'kernel', new_kernel)
+
+  assert jnp.allclose(
+      params._data[('root', 'linear', 'kernel')].value, new_kernel
+  )
+
+
+def test_set_param_trainable():
+  """Verifies set_param can update trainable flag."""
+  graph = bx.Graph('root')
+  rng = bx.Rng(graph.child('rng'))
+  layer = bx.Linear(graph.child('linear'), output_size=3, rng=rng)
+
+  x = jnp.ones((2, 5))
+  params = rng.seed(bx.Params(), seed=0)
+  _, params = layer(params, x)
+  params = params.locked()
+
+  # Initially trainable.
+  assert params._data[('root', 'linear', 'kernel')].trainable is True
+
+  # Freeze the parameter.
+  params = layer.set_param(params, 'kernel', None, trainable=False)
+
+  assert params._data[('root', 'linear', 'kernel')].trainable is False
+  # Value should be unchanged.
+  assert params._data[('root', 'linear', 'kernel')].value is not None
+
+
+def test_set_param_metadata():
+  """Verifies set_param can update metadata."""
+  graph = bx.Graph('root')
+  rng = bx.Rng(graph.child('rng'))
+  layer = bx.Linear(graph.child('linear'), output_size=3, rng=rng)
+
+  x = jnp.ones((2, 5))
+  params = rng.seed(bx.Params(), seed=0)
+  _, params = layer(params, x)
+  params = params.locked()
+
+  # Add metadata.
+  params = layer.set_param(params, 'kernel', None, metadata={'tag': 'lora'})
+
+  assert params._data[('root', 'linear', 'kernel')].metadata['tag'] == 'lora'
+
+
+def test_set_param_metadata_merges():
+  """Verifies set_param merges metadata with existing."""
+  graph = bx.Graph('root')
+  rng = bx.Rng(graph.child('rng'))
+  layer = bx.Linear(
+      graph.child('linear'),
+      output_size=3,
+      rng=rng,
+      kernel_metadata={'sharding': (None, 'model')},
+  )
+
+  x = jnp.ones((2, 5))
+  params = rng.seed(bx.Params(), seed=0)
+  _, params = layer(params, x)
+  params = params.locked()
+
+  # Add more metadata - should merge.
+  params = layer.set_param(params, 'kernel', None, metadata={'tag': 'lora'})
+
+  meta = params._data[('root', 'linear', 'kernel')].metadata
+  assert meta['sharding'] == (None, 'model')  # Preserved.
+  assert meta['tag'] == 'lora'  # Added.
+
+
+def test_set_param_requires_something():
+  """Verifies set_param fails if nothing is provided."""
+  graph = bx.Graph('root')
+  rng = bx.Rng(graph.child('rng'))
+  layer = bx.Linear(graph.child('linear'), output_size=3, rng=rng)
+
+  x = jnp.ones((2, 5))
+  params = rng.seed(bx.Params(), seed=0)
+  _, params = layer(params, x)
+  params = params.locked()
+
+  try:
+    layer.set_param(params, 'kernel', None)
+    assert False, 'Should have raised ValueError'
+  except ValueError as e:
+    assert 'At least one' in str(e)
+
+
+# =============================================================================
+# Params.__setitem__ and unlocked() Tests
+# =============================================================================
+
+
+def test_params_setitem():
+  """Verifies __setitem__ can set a Param directly."""
+  params = bx.Params()
+
+  kernel = jnp.ones((5, 3))
+  params[('net', 'linear', 'kernel')] = bx.Param(kernel, trainable=True)
+
+  assert ('net', 'linear', 'kernel') in params
+  assert jnp.allclose(params[('net', 'linear', 'kernel')].value, kernel)
+
+
+def test_params_setitem_requires_param():
+  """Verifies __setitem__ requires a Param object."""
+  params = bx.Params()
+
+  try:
+    params[('net', 'linear', 'kernel')] = jnp.ones((5, 3))  # type: ignore[arg-type]
+    assert False, 'Should have raised TypeError'
+  except TypeError as e:
+    assert 'Expected Param' in str(e)
+
+
+def test_params_setitem_fails_when_locked():
+  """Verifies __setitem__ fails on locked params."""
+  params = bx.Params().locked()
+
+  try:
+    params[('net', 'linear', 'kernel')] = bx.Param(jnp.ones((5, 3)))
+    assert False, 'Should have raised RuntimeError'
+  except RuntimeError as e:
+    assert 'locked' in str(e).lower()
+
+
+def test_params_unlocked():
+  """Verifies unlocked() allows new params to be added."""
+  graph = bx.Graph('root')
+  rng = bx.Rng(graph.child('rng'))
+  layer = bx.Linear(graph.child('linear'), output_size=3, rng=rng)
+
+  x = jnp.ones((2, 5))
+  params = rng.seed(bx.Params(), seed=0)
+  _, params = layer(params, x)
+  params = params.locked()
+
+  # This would fail on locked params.
+  try:
+    params[('net', 'new', 'param')] = bx.Param(jnp.ones((2,)))
+    assert False, 'Should have raised RuntimeError'
+  except RuntimeError:
+    pass
+
+  # But works after unlocked().
+  params = params.unlocked()
+  params[('net', 'new', 'param')] = bx.Param(jnp.ones((2,)))
+
+  assert ('net', 'new', 'param') in params
+
+
+def test_params_unlocked_allows_get_param():
+  """Verifies unlocked() allows new params via get_param."""
+  graph = bx.Graph('root')
+  rng = bx.Rng(graph.child('rng'))
+  layer1 = bx.Linear(graph.child('linear1'), output_size=3, rng=rng)
+
+  x = jnp.ones((2, 5))
+  params = rng.seed(bx.Params(), seed=0)
+  _, params = layer1(params, x)
+  params = params.locked()
+
+  # Create a new layer after locking.
+  layer2 = bx.Linear(graph.child('linear2'), output_size=2, rng=rng)
+
+  # Would fail on locked.
+  try:
+    _, params = layer2(params, x)
+    assert False, 'Should have raised KeyError'
+  except KeyError:
+    pass
+
+  # Works after unlocked.
+  params = params.unlocked()
+  _, params = layer2(params, x)
+
+  assert ('root', 'linear2', 'kernel') in params
+
+
+# =============================================================================
+# get_param without shape/init Tests
+# =============================================================================
+
+
+def test_get_param_existing_without_shape_init():
+  """Verifies get_param can retrieve existing params without shape/init."""
+  graph = bx.Graph('root')
+  rng = bx.Rng(graph.child('rng'))
+  layer = bx.Linear(graph.child('linear'), output_size=3, rng=rng)
+
+  x = jnp.ones((2, 5))
+  params = rng.seed(bx.Params(), seed=0)
+  _, params = layer(params, x)
+  params = params.locked()
+
+  # Get existing kernel without specifying shape/init.
+  kernel, _ = layer.get_param(params, 'kernel')
+
+  assert kernel.shape == (5, 3)
+
+
+def test_get_param_missing_without_shape_init():
+  """Verifies get_param raises KeyError for missing params without shape/init."""
+  graph = bx.Graph('root')
+  layer = bx.Linear(graph.child('linear'), output_size=3, rng=None)
+
+  params = bx.Params()
+
+  try:
+    layer.get_param(params, 'kernel')
+    assert False, 'Should have raised KeyError'
+  except KeyError as e:
+    assert 'not found' in str(e)
+    assert 'shape and init' in str(e)

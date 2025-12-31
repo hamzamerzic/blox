@@ -68,7 +68,7 @@ def test_sharded_linear_model_parallel():
   x_sample = jnp.ones((1, 8))
   params = rng.seed(bx.Params(), seed=42)
   _, params = linear(params, x_sample)
-  params = params.finalized()
+  params = params.locked()
 
   # Shard params according to metadata.
   param_specs = get_partition_spec(params)
@@ -113,7 +113,7 @@ def test_sharded_linear_data_parallel():
   x_sample = jnp.ones((1, 3))
   params = rng.seed(bx.Params(), seed=42)
   _, params = linear(params, x_sample)
-  params = params.finalized()
+  params = params.locked()
 
   # Replicate params.
   param_specs = get_partition_spec(params)
@@ -173,7 +173,7 @@ def test_sharded_mlp_tensor_parallel():
   x_sample = jnp.ones((1, 8))
   params = rng.seed(bx.Params(), seed=42)
   _, params = mlp(params, x_sample)
-  params = params.finalized()
+  params = params.locked()
 
   # Shard params.
   param_specs = get_partition_spec(params)
@@ -234,7 +234,7 @@ def test_shard_map_init_produces_same_params():
     # Also get a runtime key to verify auto_fold_in_axes works there.
     key, params = rng(params)
     # Add dimension for sharding.
-    return key[None], params.finalized()
+    return key[None], params.locked()
 
   x_sample = jnp.ones((1, 3))
 
@@ -293,7 +293,7 @@ def test_init_without_auto_fold_in_axes_produces_same_params():
     # No auto_fold_in_axes = all devices use same RNG sequence.
     params = rng.seed(bx.Params(), seed=42)
     _, params = linear(params, x)
-    return params.finalized()
+    return params.locked()
 
   x_sample = jnp.ones((1, 3))
   params_structure = jax.eval_shape(init_model, x_sample)

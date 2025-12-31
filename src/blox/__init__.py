@@ -9,19 +9,21 @@ and data flow transparent.
 
 Key Concepts:
 - **Explicit State:** Models are stateless transformations. All parameters are
-  passed explicitly in a `Params` container. Functions return `(outputs, params)`.
-- **Graph vs. Params:** `Graph` defines the hierarchical structure (naming/paths),
-  while `Params` holds the actual state (weights, RNG keys).
+  passed explicitly in a `Params` container. Functions return
+  `(outputs, params)`.
+- **Graph vs. Params:** `Graph` defines the hierarchical structure
+  (naming/paths), while `Params` holds the actual state (weights, RNG keys).
 - **Lazy Initialization:** You define the model structure once. Parameters are
   materialized only when you run a forward pass with `params` containing an RNG.
-- **JAX Compatibility:** Works seamlessly with `jax.jit`, `jax.vmap`, `jax.grad`,
-  and `jax.shard_map`.
-- **Structural RNG:** Randomness is handled via `Params`. `Rng` automatically folds
-  in `vmap`/`shard_map` axes to split keys across devices/batches.
+- **JAX Compatibility:** Works seamlessly with `jax.jit`, `jax.vmap`,
+  `jax.grad`, `jax.shard_map`, etc.
+- **Structural RNG:** Randomness is handled via `Params`. `Rng` by default
+  folds in `vmap`/`shard_map` axes to split keys across devices/batches.
 
 Gotchas:
-- **Purity:** Modules must be pure. Do not store state in `self`. Use `get_param`.
-- **Initialization:** You must call `finalized()` on params after the first pass
+- **Purity:** Modules must be pure. Do not store state in `self`. Use
+  `get_param` and `set_param`.
+- **Initialization:** You must call `locked()` on params after the first pass
   to prevent accidental creation of new parameters during training/inference.
 - **Sequence Models:** RNNs (`LSTM`, `GRU`) process entire sequences by default
   using `jax.lax.scan`. Use `__call__` for single-step processing.
