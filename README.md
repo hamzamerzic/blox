@@ -464,27 +464,44 @@ By accepting slightly more verbose function signatures, you gain:
 
 ## 🔀 Decoupled Params and Graph
 
-A key design principle is the **clean separation between parameters and the model graph**. Unlike Flax or Equinox where params are tightly coupled to modules, blox lets multiple models share the same params:
+A key design principle is the **clean separation between parameters and the model graph**. Unlike other libraries where params are tightly coupled to modules, blox lets multiple models share the same params.
+
+**Why this separation?**
+
+1. **No single module owns params.** Params are passed in, not stored. Multiple models can use the same params without ownership conflicts.
+2. **Avoids pytree complexity.** Modules as pytrees containing both static config and JAX arrays require magic handling, especially for non-hashable types (like lists and dicts). blox keeps a clean split: `Graph` is static (Python objects), `Params` is dynamic (JAX arrays).
+3. **Graph is static, params are dynamic.** Graph describes *what* operations to do. Params provide *what values* to use. This separation is maintained throughout execution.
+
+**Use cases:**
+
+* **Actor vs Learner in RL**: Separate models for data collection and training that share weights.
+* **Training vs Evaluation**: Scenarios where evaluation logic differs significantly while relying on the same parameters.
+
+**Rule of thumb:** If the model needs recompilation, prefer creating a new model instead of modifying an existing one or creating an Uber-module.
+
+This design should be inspired by the function. For example, if you need both static and dynamic scanning behavior, you should opt for creating two models.
 
 ```python
-# Create two LSTM variants with the same parameter structure
+# Create two LSTM variants with the same parameter structure.
 def create_lstm(is_static: bool):
-    graph = bx.Graph('model')
-    rng = bx.Rng(graph.child('rng'))
-    return bx.LSTM(graph.child('lstm'), hidden_size=64, rng=rng, is_static=is_static)
+  graph = bx.Graph('model')
+  rng = bx.Rng(graph.child('rng'))
+  return bx.LSTM(
+      graph.child('lstm'),
+      hidden_size=64,
+      rng=rng,
+      is_static=is_static
+  )
 
-lstm_debug = create_lstm(is_static=True)   # Python loop (debuggable)
-lstm_fast = create_lstm(is_static=False)   # lax.scan (production)
+lstm_static = create_lstm(is_static=True)  # Python loop (debuggable).
+lstm_dynamic = create_lstm(is_static=False)  # lax.scan (production).
 
 # Both models work with the SAME params!
-out_debug, _ = lstm_debug.apply(params, inputs, prev_state=state)
-out_fast, _ = lstm_fast.apply(params, inputs, prev_state=state)
+out_static, _ = lstm_static.apply(params, inputs, prev_state=state)
+out_dynamic, _ = lstm_dynamic.apply(params, inputs, prev_state=state)
 ```
 
-**Why this matters:**
-- **Actor/Learner in RL**: Separate models for data collection and training, sharing weights
-- **Train/Eval modes**: Different dropout behavior, same parameters
-- **LoRA adapters**: Design models LoRA-aware from the start rather than monkey-patching
+While nothing prevents users from changing modules in place, JAX will not recompile functions automatically unless manually instructed (see [JAX Gotchas](https://docs.jax.dev/en/latest/notebooks/Common_Gotchas_in_JAX.html#using-jax-jit-with-class-methods)). We do support exceptions for ergonomics, such as the `is_training` when evaluation logic is only a simple flag away from training logic, e.g. dropout.
 
 ## 📄 License
 

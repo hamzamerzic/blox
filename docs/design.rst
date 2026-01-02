@@ -264,6 +264,14 @@ Decoupled Params and Graph
 
 A key design principle in blox is the **clean separation between parameters and the model graph**. This is different from frameworks like Flax or Equinox where parameters are tightly coupled to modules.
 
+**Why this separation?**
+
+1. **No single module owns params.** Parameters are passed into functions, not stored in modules. This enables multiple models to operate on the same params without ownership conflicts.
+
+2. **Avoids pytree complexity.** When modules are pytrees containing both static configuration and JAX arrays, you get finnicky behavior requiring magic handling and special wrappers. blox keeps a clean split: the ``Graph`` is purely static (Python objects describing structure), while ``Params`` is purely dynamic (JAX arrays ready for transformations).
+
+3. **Graph is static, params are dynamic.** The graph describes *what* operations to perform. The params provide *what values* to use. This separation is maintained throughout execution—graph structure doesn't change at runtime, only param values do.
+
 **Multiple models can share the same params:**
 
 .. code-block:: python
@@ -285,12 +293,16 @@ A key design principle in blox is the **clean separation between parameters and 
    out_static, _ = lstm_static.apply(params, inputs, prev_state=state)
    out_dynamic, _ = lstm_dynamic.apply(params, inputs, prev_state=state)
 
-**Why this matters:**
+**Use cases enabled by this design:**
 
 1. **Actor/Learner pattern**: In RL, the Actor (collects data) and Learner (updates weights) can be separate models sharing params.
 
 2. **Train/Eval pattern**: Training model (with dropout) and evaluation model (without) share the same params.
 
-3. **Static graph preference**: Since multiple models can share params, blox recommends using factory functions to create model variants rather than modifying modules after creation.
+**Design recommendations:**
+
+3. **Create static models with deliberate purpose.** Use factory functions to create model variants at construction time. Each model's purpose should be clear from how it's built, not from runtime modifications.
 
 4. **LoRA-aware design**: Instead of monkey-patching LoRA onto existing models, design your model to support LoRA from the start. This keeps the structure explicit and visualization accurate.
+
+5. **Avoid runtime graph mutation.** While users have freedom to manipulate the graph, a clean design creates different models for different purposes rather than mutating one model at runtime.
