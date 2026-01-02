@@ -1,155 +1,23 @@
-"""Tests for vmap compatibility with auto_fold_in_axes."""
+"""Tests for vmap compatibility.
+
+Without manual RNG folding, all batch elements get the SAME random keys.
+This is expected JAX behavior - users must manually fold in axis indices
+to get unique randomness per batch element.
+"""
 
 import blox as bx
 import jax
 import jax.numpy as jnp
 
 # =============================================================================
-# Basic auto_fold_in_axes behavior
+# Basic vmap compatibility
 # =============================================================================
 
 
-def test_auto_fold_in_axes_noop_outside_vmap():
-  """auto_fold_in_axes is a no-op outside vmap."""
+def test_vmap_init_produces_same_params():
+  """vmap model init produces same params across batch elements."""
   graph = bx.Graph('root')
-  rng1 = bx.Rng(graph.child('rng1'), auto_fold_in_axes=True)
-  rng2 = bx.Rng(graph.child('rng2'), auto_fold_in_axes=False)
-
-  params = rng1.seed(bx.Params(), seed=42)
-  params = rng2.seed(params, seed=42)
-
-  # Outside vmap, both should produce the same keys.
-  key1, _ = rng1(params)
-  key2, _ = rng2(params)
-
-  assert jnp.array_equal(key1, key2)
-
-
-def test_auto_fold_in_axes_inside_vmap():
-  """auto_fold_in_axes produces different keys per batch element inside vmap."""
-  graph = bx.Graph('root')
-  rng = bx.Rng(graph.child('rng'), auto_fold_in_axes=True)
-
-  def get_key(x):
-    params = rng.seed(bx.Params(), seed=42)
-    key, _ = rng(params)
-    return key
-
-  keys = jax.vmap(get_key, axis_name='batch')(jnp.ones((4, 1)))
-
-  # Each batch element should have different key.
-  for i in range(1, 4):
-    assert not jnp.array_equal(keys[0], keys[i])
-
-
-def test_auto_fold_in_axes_disabled_inside_vmap():
-  """auto_fold_in_axes=False produces same keys across batch elements."""
-  graph = bx.Graph('root')
-  rng = bx.Rng(graph.child('rng'), auto_fold_in_axes=False)
-
-  def get_key(x):
-    params = rng.seed(bx.Params(), seed=42)
-    key, _ = rng(params)
-    return key
-
-  keys = jax.vmap(get_key, axis_name='batch')(jnp.ones((4, 1)))
-
-  # All batch elements should have the same key.
-  for i in range(1, 4):
-    assert jnp.array_equal(keys[0], keys[i])
-
-
-def test_auto_fold_in_axes_multiple_axes():
-  """auto_fold_in_axes works with multiple nested axes."""
-  graph = bx.Graph('root')
-  rng = bx.Rng(graph.child('rng'), auto_fold_in_axes=True)
-
-  def get_key(x):
-    params = rng.seed(bx.Params(), seed=42)
-    key, _ = rng(params)
-    return key
-
-  nested = jax.vmap(jax.vmap(get_key, axis_name='inner'), axis_name='outer')
-  keys = nested(jnp.ones((2, 3, 1)))
-
-  # All 6 keys should be unique.
-  flat = keys.reshape(6, -1)
-  for i in range(6):
-    for j in range(i + 1, 6):
-      assert not jnp.array_equal(flat[i], flat[j])
-
-
-# =============================================================================
-# RNG key generation with auto_fold_in_axes
-# =============================================================================
-
-
-def test_rng_produces_different_keys_per_batch():
-  """Rng produces different keys per batch element with auto_fold_in_axes."""
-  graph = bx.Graph('root')
-  rng = bx.Rng(graph.child('rng'), auto_fold_in_axes=True)
-
-  def get_key(x):
-    params = rng.seed(bx.Params(), seed=42)
-    key, _ = rng(params)
-    return key
-
-  keys = jax.vmap(get_key, axis_name='batch')(jnp.ones((4, 1)))
-
-  for i in range(1, 4):
-    assert not jnp.array_equal(keys[0], keys[i])
-
-
-def test_without_auto_fold_produces_same_keys():
-  """Without auto_fold_in_axes, all batch elements get same RNG keys."""
-  graph = bx.Graph('root')
-  rng = bx.Rng(graph.child('rng'), auto_fold_in_axes=False)
-
-  def get_key(x):
-    params = rng.seed(bx.Params(), seed=42)
-    key, _ = rng(params)
-    return key
-
-  keys = jax.vmap(get_key, axis_name='batch')(jnp.ones((4, 1)))
-
-  for i in range(1, 4):
-    assert jnp.array_equal(keys[0], keys[i])
-
-
-# =============================================================================
-# Nested vmap behavior
-# =============================================================================
-
-
-def test_nested_vmap_unique_keys():
-  """Nested vmap with auto_fold_in_axes produces unique keys at each position."""
-  graph = bx.Graph('root')
-  rng = bx.Rng(graph.child('rng'), auto_fold_in_axes=True)
-
-  def inner(x):
-    params = rng.seed(bx.Params(), seed=42)
-    key, _ = rng(params)
-    return key
-
-  nested = jax.vmap(jax.vmap(inner, axis_name='inner'), axis_name='outer')
-  keys = nested(jnp.ones((2, 3, 1)))  # [outer=2, inner=3, features=1]
-
-  # All 6 keys should be unique.
-  flat = keys.reshape(6, -1)
-  for i in range(6):
-    for j in range(i + 1, 6):
-      assert not jnp.array_equal(flat[i], flat[j])
-
-
-# =============================================================================
-# Integration tests - realistic usage patterns
-# =============================================================================
-
-
-def test_vmap_init_without_auto_fold_produces_same_params():
-  """Integration: vmap model init without auto_fold_in_axes produces same params."""
-  graph = bx.Graph('root')
-  rng = bx.Rng(graph.child('rng'), auto_fold_in_axes=False)
+  rng = bx.Rng(graph.child('rng'))
   linear = bx.Linear(graph.child('linear'), output_size=4, rng=rng)
 
   def init(x):
@@ -165,127 +33,34 @@ def test_vmap_init_without_auto_fold_produces_same_params():
     assert jnp.allclose(kernel[0], kernel[i])
 
 
-def test_nested_vmap_mlp_apply():
-  """Integration: nested vmap for applying model with different dropout masks."""
+def test_vmap_apply_without_rng_works():
+  """vmap apply (no RNG calls) works correctly."""
   graph = bx.Graph('root')
-  rng = bx.Rng(graph.child('rng'), auto_fold_in_axes=True)
-  # Use larger hidden size to avoid statistical collisions.
-  layer1 = bx.Linear(graph.child('layer1'), output_size=64, rng=rng)
-  dropout = bx.Dropout(graph.child('dropout'), rate=0.5, rng=rng)
-  layer2 = bx.Linear(graph.child('layer2'), output_size=32, rng=rng)
+  rng = bx.Rng(graph.child('rng'))
+  linear = bx.Linear(graph.child('linear'), output_size=4, rng=rng)
 
-  # Initialize params once (outside vmap).
-  def init_model(x):
-    params = rng.seed(bx.Params(), seed=0)
-    x, params = layer1(params, x)
-    x, params = dropout(params, x, is_training=False)
-    _, params = layer2(params, x)
-    return params.locked()
+  # Initialize params outside vmap.
+  params = rng.seed(bx.Params(), seed=42)
+  _, params = linear(params, jnp.ones((1, 3)))
+  params = params.locked()
 
-  x_sample = jnp.ones((1, 16))
-  params = init_model(x_sample)
-
-  # Apply with nested vmap - params replicated, only data and RNG vary.
-  def apply_model(params, x):
-    # auto_fold_in_axes handles unique dropout masks at each position.
-    x, params = layer1(params, x)
-    x = jax.nn.relu(x)
-    x, params = dropout(params, x, is_training=True)
-    x, params = layer2(params, x)
-    return x
-
-  # Nested vmap: params replicated (in_axes=None), data batched.
-  apply_nested = jax.vmap(
-      jax.vmap(apply_model, in_axes=(None, 0), axis_name='inner'),
-      in_axes=(None, 0),
-      axis_name='outer',
-  )
-
-  # Shape: [outer=2, inner=3, batch=1, features=16]
-  x = jnp.ones((2, 3, 1, 16))
-  out = apply_nested(params, x)
-
-  # All 6 positions should have different outputs due to different dropout.
-  flat_out = out.reshape(6, -1)
-  for i in range(6):
-    for j in range(i + 1, 6):
-      assert not jnp.allclose(flat_out[i], flat_out[j])
-
-
-def test_vmap_dropout_different_masks():
-  """Integration: vmap dropout produces different masks per batch element."""
-  graph = bx.Graph('root')
-  rng = bx.Rng(graph.child('rng'), auto_fold_in_axes=True)
-  dropout = bx.Dropout(graph.child('dropout'), rate=0.5, rng=rng)
-
+  # Apply without RNG calls (no dropout, just linear).
   def apply(x):
-    params = rng.seed(bx.Params(), seed=42)
-    out, _ = dropout(params, x, is_training=True)
+    out, _ = linear(params, x)
     return out
 
-  x = jnp.ones((4, 16))
-  out = jax.vmap(apply, axis_name='batch')(x)
+  x = jnp.ones((4, 1, 3))
+  out = jax.vmap(apply)(x)
 
-  # Each batch element should have different dropout mask.
+  # All batch elements should have same output (same linear, same input).
   for i in range(1, 4):
-    assert not jnp.array_equal(out[0] == 0, out[i] == 0)
+    assert jnp.allclose(out[0], out[i])
 
 
-def test_vmap_dropout_same_masks_without_auto_fold():
-  """Integration: vmap dropout produces same masks without auto_fold_in_axes."""
+def test_rng_counter_increments_correctly_in_vmap():
+  """Rng counter increments correctly through multiple calls in vmap."""
   graph = bx.Graph('root')
-  rng = bx.Rng(graph.child('rng'), auto_fold_in_axes=False)
-  dropout = bx.Dropout(graph.child('dropout'), rate=0.5, rng=rng)
-
-  def apply(x):
-    params = rng.seed(bx.Params(), seed=42)
-    out, _ = dropout(params, x, is_training=True)
-    return out
-
-  x = jnp.ones((4, 16))
-  out = jax.vmap(apply, axis_name='batch')(x)
-
-  # All batch elements should have the same dropout mask.
-  for i in range(1, 4):
-    assert jnp.array_equal(out[0] == 0, out[i] == 0)
-
-
-# =============================================================================
-# Pytree preservation
-# =============================================================================
-
-
-def test_params_preserved_through_jit():
-  """Params are preserved through pytree round-trip (jit)."""
-  graph = bx.Graph('root')
-  rng = bx.Rng(graph.child('rng'), auto_fold_in_axes=True)
-
-  def check_reconstruction(x):
-    params = rng.seed(bx.Params(), seed=42)
-    key1, params = rng(params)
-
-    @jax.jit
-    def identity(p):
-      return p
-
-    params_after = identity(params)
-    key2, _ = rng(params_after)
-    return key1, key2
-
-  orig, recon = jax.vmap(check_reconstruction, axis_name='batch')(
-      jnp.ones((3, 1))
-  )
-  # Keys should be different because counter incremented.
-  # But both should be valid device-unique keys.
-  for i in range(1, 3):
-    assert not jnp.array_equal(orig[0], orig[i])
-    assert not jnp.array_equal(recon[0], recon[i])
-
-
-def test_rng_counter_increments_correctly():
-  """Rng counter increments correctly through multiple calls."""
-  graph = bx.Graph('root')
-  rng = bx.Rng(graph.child('rng'), auto_fold_in_axes=True)
+  rng = bx.Rng(graph.child('rng'))
 
   def check_counter(x):
     params = rng.seed(bx.Params(), seed=42)
@@ -305,214 +80,299 @@ def test_rng_counter_increments_correctly():
     assert jnp.array_equal(counters[i], jnp.array([0, 1, 2]))
 
 
-# =============================================================================
-# auto_fold_in_axes behavior: init vs runtime
-# =============================================================================
-
-
-def test_vmap_with_axis_name_init_produces_same_params():
-  """vmap with axis_name during init produces same params per batch."""
+def test_params_preserved_through_jit_in_vmap():
+  """Params are preserved through pytree round-trip (jit) in vmap."""
   graph = bx.Graph('root')
-  rng = bx.Rng(graph.child('rng'), auto_fold_in_axes=True)
-  linear = bx.Linear(graph.child('linear'), output_size=4, rng=rng)
+  rng = bx.Rng(graph.child('rng'))
 
-  def init(x):
+  def check_reconstruction(x):
     params = rng.seed(bx.Params(), seed=42)
-    _, params = linear(params, x)
-    key, params = rng(params)
-    return key, params.locked()
+    key1, params = rng(params)
 
-  # out_axes=(0, None) - keys batched, params must be identical (JAX will fail
-  # if params differ across batch elements).
-  keys, _ = jax.vmap(init, axis_name='batch', out_axes=(0, None))(
-      jnp.ones((4, 1, 3))
+    @jax.jit
+    def identity(p):
+      return p
+
+    params_after = identity(params)
+    key2, _ = rng(params_after)
+    return key1, key2
+
+  orig, recon = jax.vmap(check_reconstruction, axis_name='batch')(
+      jnp.ones((3, 1))
   )
 
-  # Keys should be different due to auto_fold_in_axes during runtime.
+  # Keys should be different because counter incremented.
+  for i in range(3):
+    assert not jnp.array_equal(orig[i], recon[i])
+
+
+# =============================================================================
+# RNG behavior: same keys without manual folding
+# =============================================================================
+
+
+def test_vmap_produces_same_keys_without_manual_folding():
+  """vmap produces same RNG keys across batch without manual folding.
+
+  This is expected JAX behavior! Without manual axis folding, all batch
+  elements get identical random values.
+  """
+  graph = bx.Graph('root')
+  rng = bx.Rng(graph.child('rng'))
+
+  def get_key(x):
+    params = rng.seed(bx.Params(), seed=42)
+    key, _ = rng(params)
+    return key
+
+  keys = jax.vmap(get_key, axis_name='batch')(jnp.ones((4, 1)))
+
+  # All batch elements get the SAME key without manual folding.
+  for i in range(1, 4):
+    assert jnp.array_equal(keys[0], keys[i])
+
+
+def test_vmap_dropout_same_masks_without_manual_folding():
+  """vmap dropout produces same masks without manual axis folding."""
+  graph = bx.Graph('root')
+  rng = bx.Rng(graph.child('rng'))
+  dropout = bx.Dropout(graph.child('dropout'), rate=0.5, rng=rng)
+
+  def apply(x):
+    params = rng.seed(bx.Params(), seed=42)
+    out, _ = dropout(params, x, is_training=True)
+    return out
+
+  x = jnp.ones((4, 16))
+  out = jax.vmap(apply, axis_name='batch')(x)
+
+  # All batch elements have SAME dropout mask (no axis folding).
+  for i in range(1, 4):
+    assert jnp.array_equal(out[0] == 0, out[i] == 0)
+
+
+# =============================================================================
+# Manual RNG folding pattern
+# =============================================================================
+
+
+def test_explicit_batch_index_produces_different_keys():
+  """Explicit batch index folding produces different keys per batch element.
+
+  This is the simplest pattern: pass the batch index as an argument.
+  """
+  graph = bx.Graph('root')
+  rng = bx.Rng(graph.child('rng'))
+
+  def get_key_with_explicit_index(x, batch_idx):
+    params = rng.seed(bx.Params(), seed=42)
+
+    # Fold in the explicit batch index.
+    original_seed = rng.get_seed(params)
+    folded_seed = jax.random.fold_in(original_seed, batch_idx)
+    params = rng.seed(params, seed=folded_seed)
+
+    key, params = rng(params)
+    return key
+
+  # Pass jnp.arange(4) as the batch indices.
+  batch_indices = jnp.arange(4)
+  keys = jax.vmap(get_key_with_explicit_index, in_axes=(0, 0))(
+      jnp.ones((4, 1)), batch_indices
+  )
+
+  # Each batch element now has a DIFFERENT key.
   for i in range(1, 4):
     assert not jnp.array_equal(keys[0], keys[i])
 
 
-def test_vmap_without_axis_name_fails():
-  """vmap without axis_name raises ValueError with auto_fold_in_axes."""
-  import pytest
+def test_axis_index_produces_different_keys():
+  """jax.lax.axis_index folding produces different keys per batch element.
 
+  This demonstrates using axis_name with vmap to get the index implicitly.
+  """
   graph = bx.Graph('root')
-  rng = bx.Rng(graph.child('rng'), auto_fold_in_axes=True)
+  rng = bx.Rng(graph.child('rng'))
+
+  def get_key_with_axis_index(x):
+    params = rng.seed(bx.Params(), seed=42)
+
+    # Use jax.lax.axis_index to get the lane index.
+    original_seed = rng.get_seed(params)
+    folded_seed = jax.random.fold_in(original_seed, jax.lax.axis_index('batch'))
+    params = rng.seed(params, seed=folded_seed)
+
+    key, params = rng(params)
+    return key
+
+  # axis_name='batch' is required for jax.lax.axis_index.
+  keys = jax.vmap(get_key_with_axis_index, axis_name='batch')(jnp.ones((4, 1)))
+
+  # Each batch element now has a DIFFERENT key.
+  for i in range(1, 4):
+    assert not jnp.array_equal(keys[0], keys[i])
+
+
+def test_manual_folding_with_dropout():
+  """Manual axis folding gives different dropout masks per batch element."""
+  graph = bx.Graph('root')
+  rng = bx.Rng(graph.child('rng'))
   dropout = bx.Dropout(graph.child('dropout'), rate=0.5, rng=rng)
 
-  def apply(x):
+  def apply_with_folding(x):
     params = rng.seed(bx.Params(), seed=42)
+
+    # Fold in axis index for unique randomness.
+    original_seed = rng.get_seed(params)
+    folded_seed = jax.random.fold_in(original_seed, jax.lax.axis_index('batch'))
+    params = rng.seed(params, seed=folded_seed)
+
     out, _ = dropout(params, x, is_training=True)
     return out
 
   x = jnp.ones((4, 16))
+  out = jax.vmap(apply_with_folding, axis_name='batch')(x)
 
-  # Unnamed vmap should fail with auto_fold_in_axes=True.
-  with pytest.raises(ValueError, match='Unnamed vmap detected'):
-    jax.vmap(apply)(x)
-
-
-def test_unnamed_vmap_works_with_auto_fold_disabled():
-  """Unnamed vmap works when auto_fold_in_axes=False."""
-  graph = bx.Graph('root')
-  rng = bx.Rng(graph.child('rng'), auto_fold_in_axes=False)
-  dropout = bx.Dropout(graph.child('dropout'), rate=0.5, rng=rng)
-
-  def apply(x):
-    params = rng.seed(bx.Params(), seed=42)
-    out, _ = dropout(params, x, is_training=True)
-    return out
-
-  x = jnp.ones((4, 16))
-  out = jax.vmap(apply)(x)
-
-  # All batch elements have SAME dropout mask (no axis folding).
+  # Each batch element now has a DIFFERENT dropout mask.
   for i in range(1, 4):
-    assert jnp.array_equal(out[0], out[i])
+    assert not jnp.array_equal(out[0] == 0, out[i] == 0)
 
 
-def test_unnamed_vmap_works_without_rng_calls():
-  """Unnamed vmap works with auto_fold_in_axes=True if no RNG calls made."""
+def test_manual_folding_nested_vmap():
+  """Manual folding works with nested vmaps."""
   graph = bx.Graph('root')
-  rng = bx.Rng(graph.child('rng'), auto_fold_in_axes=True)
-  linear = bx.Linear(graph.child('linear'), output_size=4, rng=rng)
+  rng = bx.Rng(graph.child('rng'))
 
-  # Initialize params outside vmap.
-  def init(x):
+  def get_key_with_folding(x):
     params = rng.seed(bx.Params(), seed=42)
-    _, params = linear(params, x)
-    return params.locked()
 
-  params = init(jnp.ones((1, 3)))
+    # Fold in both axes for unique keys across all positions.
+    original_seed = rng.get_seed(params)
 
-  # Apply without RNG calls (no dropout, just linear).
-  def apply(x):
-    out, _ = linear(params, x)
-    return out
+    # Get combined index from both axes.
+    outer_idx = jax.lax.axis_index('outer')
+    inner_idx = jax.lax.axis_index('inner')
 
-  x = jnp.ones((4, 1, 3))
-  # Unnamed vmap works because we don't call rng() during apply.
-  out = jax.vmap(apply)(x)
+    # Fold in both indices (order matters but is deterministic).
+    folded_seed = jax.random.fold_in(original_seed, outer_idx)
+    folded_seed = jax.random.fold_in(folded_seed, inner_idx)
 
-  # All batch elements should have same output (same linear).
-  for i in range(1, 4):
-    assert jnp.allclose(out[0], out[i])
-
-
-def test_double_jit_with_nested_vmaps():
-  """Double JIT with nested named vmaps produces unique indices."""
-  graph = bx.Graph('root')
-  rng = bx.Rng(graph.child('rng'), auto_fold_in_axes=True)
-
-  def get_key(x):
-    params = rng.seed(bx.Params(), seed=42)
+    params = rng.seed(params, seed=folded_seed)
     key, _ = rng(params)
     return key
 
-  @jax.jit
-  def inner_jit(data):
-    return jax.vmap(get_key, axis_name='v_inner')(data)
+  nested = jax.vmap(
+      jax.vmap(get_key_with_folding, axis_name='inner'),
+      axis_name='outer',
+  )
+  keys = nested(jnp.ones((2, 3, 1)))
 
-  @jax.jit
-  def outer_jit(data):
-    return jax.vmap(inner_jit, axis_name='v_outer')(data)
-
-  x = jnp.zeros((4, 2, 6))
-  keys = outer_jit(x)
-
-  # All 8 keys should be unique.
-  flat = keys.reshape(8, -1)
-  for i in range(8):
-    for j in range(i + 1, 8):
+  # All 6 keys should be unique.
+  flat = keys.reshape(6, -1)
+  for i in range(6):
+    for j in range(i + 1, 6):
       assert not jnp.array_equal(flat[i], flat[j])
 
 
-def test_scan_with_vmap():
-  """lax.scan with vmap inside produces unique keys per scan step."""
+def test_manual_folding_restores_seed_for_replicated_params():
+  """Manual folding with seed restoration for replicated output params.
+
+  When params must be identical across lanes (out_axes=None), the seed
+  must be restored to the original value before returning. The counter
+  is the same across lanes since we run the same function with the same
+  number of RNG calls.
+  """
   graph = bx.Graph('root')
-  rng = bx.Rng(graph.child('rng'), auto_fold_in_axes=True)
+  rng = bx.Rng(graph.child('rng'))
+  linear = bx.Linear(graph.child('linear'), output_size=4, rng=rng)
 
-  def get_key(x):
+  def init_and_apply_with_folding(x):
     params = rng.seed(bx.Params(), seed=42)
-    key, _ = rng(params)
-    return key
+    _, params = linear(params, x)
+    params = params.locked()
 
-  def scan_body(carry, chunk):
-    i = carry
-    local_keys = jax.vmap(get_key, axis_name='v_inner')(chunk)
-    return i + 1, local_keys
+    # For runtime operations, fold in axis index.
+    original_seed = rng.get_seed(params)
+    folded_seed = jax.random.fold_in(original_seed, jax.lax.axis_index('batch'))
 
-  x = jnp.zeros((4, 2, 6))
-  _, keys = jax.lax.scan(scan_body, 0, x)
+    # Seed can be modified even on locked params (only structure is locked).
+    params = rng.seed(params, seed=folded_seed)
 
-  # Keys should be different per vmap position within each step.
-  for step in range(4):
-    assert not jnp.array_equal(keys[step, 0], keys[step, 1])
+    # Get unique key per lane.
+    key, params = rng(params)
+
+    # IMPORTANT: Restore original seed before returning replicated params.
+    params = rng.seed(params, seed=original_seed)
+
+    return key, params
+
+  # out_axes=(0, None) means keys are batched but params must be identical.
+  keys, params = jax.vmap(
+      init_and_apply_with_folding,
+      axis_name='batch',
+      out_axes=(0, None),
+  )(jnp.ones((4, 1, 3)))
+
+  # Keys should be different due to manual folding.
+  for i in range(1, 4):
+    assert not jnp.array_equal(keys[0], keys[i])
+
+  # Params should have the original seed restored.
+  final_seed = rng.get_seed(params)
+  expected_seed = jax.random.key(42)
+  assert jnp.array_equal(final_seed, expected_seed)
 
 
-def test_scan_with_jit_vmap():
-  """lax.scan with jit(vmap) inside produces unique keys."""
+def test_init_vs_runtime_folding_pattern():
+  """Demonstrates the init vs runtime folding pattern.
+
+  During initialization (params unlocked), we do NOT fold in axis indices
+  because we want identical params across all batch elements.
+
+  During runtime (params locked), we DO fold in axis indices to get
+  unique randomness per batch element.
+
+  This pattern allows using the same vmap function for both init and runtime.
+  """
   graph = bx.Graph('root')
-  rng = bx.Rng(graph.child('rng'), auto_fold_in_axes=True)
+  rng = bx.Rng(graph.child('rng'))
+  dropout = bx.Dropout(graph.child('dropout'), rate=0.5, rng=rng)
 
-  def get_key(x):
+  def forward(params, x):
+    # Check if we're in init mode (unlocked) or runtime mode (locked).
+    is_runtime = params._locked
+
+    if is_runtime:
+      # Runtime: fold in axis index for unique randomness per lane.
+      original_seed = rng.get_seed(params)
+      folded_seed = jax.random.fold_in(
+          original_seed, jax.lax.axis_index('batch')
+      )
+      params = rng.seed(params, seed=folded_seed)
+
+    out, params = dropout(params, x, is_training=is_runtime)
+
+    if is_runtime:
+      # Restore original seed before returning (for replicated params).
+      params = rng.seed(params, seed=original_seed)
+
+    return out, params
+
+  # === Init phase: unlocked params, no folding ===
+  def init(x):
     params = rng.seed(bx.Params(), seed=42)
-    key, _ = rng(params)
-    return key
+    _, params = forward(params, x)
+    return params.locked()
 
-  def scan_body(carry, chunk):
-    i = carry
+  # Init with vmap - params should be identical across batch.
+  params = jax.vmap(init, axis_name='batch', out_axes=None)(
+      jnp.ones((4, 1, 16))
+  )
 
-    @jax.jit
-    def body_step(c):
-      return jax.vmap(get_key, axis_name='v_inner')(c)
+  # === Runtime phase: locked params, with folding ===
+  x = jnp.ones((4, 1, 16))
+  out, _ = jax.vmap(forward, in_axes=(None, 0), axis_name='batch')(params, x)
 
-    local_keys = body_step(chunk)
-    return i + 1, local_keys
-
-  x = jnp.zeros((4, 2, 6))
-  _, keys = jax.lax.scan(scan_body, 0, x)
-
-  # Keys should be different per vmap position within each step.
-  for step in range(4):
-    assert not jnp.array_equal(keys[step, 0], keys[step, 1])
-
-
-def test_unnamed_vmap_inside_jit_fails():
-  """Unnamed vmap inside JIT fails with auto_fold_in_axes."""
-  import pytest
-
-  graph = bx.Graph('root')
-  rng = bx.Rng(graph.child('rng'), auto_fold_in_axes=True)
-
-  def get_key(x):
-    params = rng.seed(bx.Params(), seed=42)
-    key, _ = rng(params)
-    return key
-
-  with pytest.raises(ValueError, match='Unnamed vmap detected'):
-    jax.jit(jax.vmap(get_key))(jnp.ones((4, 6)))
-
-
-def test_outer_unnamed_vmap_with_inner_jit_named_vmap():
-  """Outer unnamed vmap is invisible to inner jit(named vmap)."""
-  graph = bx.Graph('root')
-  rng = bx.Rng(graph.child('rng'), auto_fold_in_axes=True)
-
-  def get_key(x):
-    params = rng.seed(bx.Params(), seed=42)
-    key, _ = rng(params)
-    return key
-
-  @jax.jit
-  def inner_jit(data):
-    return jax.vmap(get_key, axis_name='inner')(data)
-
-  # Outer unnamed vmap is stopped at JIT barrier, so this works.
-  x = jnp.zeros((4, 2, 6))
-  keys = jax.vmap(inner_jit)(x)
-
-  # Inner vmap produces different keys (only sees 'inner' axis).
-  for i in range(4):
-    assert not jnp.array_equal(keys[i, 0], keys[i, 1])
+  # Runtime outputs should differ due to folding (different dropout masks).
+  for i in range(1, 4):
+    assert not jnp.allclose(out[0], out[i])

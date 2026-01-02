@@ -1,5 +1,3 @@
-"""Tests for the Embed layer."""
-
 import blox as bx
 import jax
 import jax.numpy as jnp

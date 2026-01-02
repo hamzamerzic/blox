@@ -334,10 +334,14 @@ def test_rng_reseed_pattern():
   assert jnp.array_equal(key_after, new_key)
 
 
-def test_auto_fold_in_axes_produces_different_keys():
-  """Verifies auto_fold_in_axes produces different RNG keys per batch element."""
+def test_vmap_produces_same_keys_without_manual_folding():
+  """Verifies vmap produces same RNG keys across batch without manual folding.
+
+  This is expected behavior! To get different keys per batch element, users
+  must manually fold in the axis index. See README for the pattern.
+  """
   graph = bx.Graph('root')
-  rng = bx.Rng(graph.child('rng'), auto_fold_in_axes=True)
+  rng = bx.Rng(graph.child('rng'))
 
   def get_key(x):
     params = rng.seed(bx.Params(), seed=42)
@@ -346,40 +350,9 @@ def test_auto_fold_in_axes_produces_different_keys():
 
   keys = jax.vmap(get_key, axis_name='batch')(jnp.ones((4, 1)))
 
-  for i in range(1, 4):
-    assert not jnp.array_equal(keys[0], keys[i])
-
-
-def test_auto_fold_in_axes_disabled_produces_same_keys():
-  """Verifies auto_fold_in_axes=False produces same RNG keys across batch."""
-  graph = bx.Graph('root')
-  rng = bx.Rng(graph.child('rng'), auto_fold_in_axes=False)
-
-  def get_key(x):
-    params = rng.seed(bx.Params(), seed=42)
-    key, _ = rng(params)
-    return key
-
-  keys = jax.vmap(get_key, axis_name='batch')(jnp.ones((4, 1)))
-
+  # Without manual folding, all batch elements get the SAME key.
   for i in range(1, 4):
     assert jnp.array_equal(keys[0], keys[i])
-
-
-def test_auto_fold_in_axes_noop_outside_vmap():
-  """Verifies auto_fold_in_axes is a no-op outside vmap."""
-  graph = bx.Graph('root')
-  rng1 = bx.Rng(graph.child('rng1'), auto_fold_in_axes=True)
-  rng2 = bx.Rng(graph.child('rng2'), auto_fold_in_axes=False)
-
-  params = rng1.seed(bx.Params(), seed=42)
-  params = rng2.seed(params, seed=42)
-
-  # Outside vmap, both should produce the same keys.
-  key1, _ = rng1(params)
-  key2, _ = rng2(params)
-
-  assert jnp.array_equal(key1, key2)
 
 
 def test_module_param_path():

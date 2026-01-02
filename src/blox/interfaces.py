@@ -511,10 +511,6 @@ class Params:
     # the counter) even if the initializer doesn't need it. This ensures
     # consistent initialization order: changing one param's initializer from
     # random to constant won't affect other params' random seeds.
-
-    # NOTE: We bypass auto_fold_in_axes here intentionally. During param
-    # initialization, we want identical params across all batch elements/devices.
-    # auto_fold_in_axes is only for runtime operations like dropout.
     if rng is not None:
       key = rng.get_seed(self)
       counter = rng.get_counter(self)
@@ -863,56 +859,6 @@ class Module:
     """
 
 
-def _validate_no_unnamed_axes(trace: Any) -> None:
-  """Validates that no unnamed vmaps exist in the trace stack.
-
-  Walks up the trace parent chain and raises an error if any unnamed vmap
-  is found. Stops at JIT barriers since outer axes are irrelevant to
-  compiled code.
-
-  Raises:
-    ValueError: If an unnamed vmap is detected.
-  """
-  if not hasattr(trace, 'parent_trace'):
-    return
-
-  trace_type = type(trace).__name__
-
-  # Fail if unnamed vmap found.
-  if trace_type == 'BatchTrace':
-    if not isinstance(trace.axis_data.name, str):
-      raise ValueError(
-          'Unnamed vmap detected. Please provide `axis_name` to all `jax.vmap` '
-          'calls that generate random keys using Rng with auto_fold_in_axes.'
-      )
-
-  # Stop at JIT barrier (outer axes are irrelevant to compiled code).
-  if trace_type == 'DynamicJaxprTrace':
-    return
-
-  _validate_no_unnamed_axes(trace.parent_trace)
-
-
-def _auto_axis_index() -> jax.Array | None:
-  """Computes a unique index for the current position in vmap/shard_map.
-
-  Returns None if not inside any vmap/shard_map. Otherwise returns an array
-  that uniquely identifies this position across all axes.
-
-  Raises:
-    ValueError: If an unnamed vmap is detected.
-  """
-  # Validate all vmaps have names.
-  _validate_no_unnamed_axes(jax.core.trace_ctx.trace)
-
-  # Get all active axis names (logical order: outer -> inner).
-  axis_names = jax.core.unsafe_get_axis_names_DO_NOT_USE()
-  if not axis_names:
-    return None
-
-  return jax.lax.axis_index(tuple(axis_names))
-
-
 class Rng(Module):
   """A random number generator stream stored as non-trainable params.
 
@@ -949,20 +895,13 @@ class Rng(Module):
         return jax.random.dropout(key, self.rate, x), params
   """
 
-  def __init__(self, graph: Graph, auto_fold_in_axes: bool = True) -> None:
+  def __init__(self, graph: Graph) -> None:
     """Initializes the Rng module.
 
     Args:
       graph: The graph node for this module's scope.
-      auto_fold_in_axes: If True (default), automatically folds in axis indices
-        when inside shard_map/vmap to produce device-unique keys. This is not
-        applied during parameter initialization so that parameters are not
-        different on different devices. For sharded initialization, use jax.jit
-        to handle Rng partitioning automatically, or handle folding manually
-        with shard_map.
     """
     super().__init__(graph)
-    self.auto_fold_in_axes = auto_fold_in_axes
 
   def get_seed(self, params: Params) -> jax.Array:
     """Returns the seed key.
@@ -1080,18 +1019,8 @@ class Rng(Module):
   def __call__(self, params: Params) -> tuple[jax.Array, Params]:
     """Returns (new_key, new_params) tuple, with params' counter incremented.
 
-    When auto_fold_in_axes is True (default), automatically folds in axis
-    indices when inside shard_map and vmap to produce device-unique keys.
-
-    For manual control over folding, set auto_fold_in_axes=False and use
-    get_seed/seed directly:
-      original_seed = rng.get_seed(params)
-      folded_seed = jax.random.fold_in(
-          original_seed, jax.lax.axis_index('batch')
-      )
-      params = rng.seed(params, seed=folded_seed)
-      # ... do operations ...
-      params = rng.seed(params, seed=original_seed)  # Restore before returning.
+    The key is derived by folding the counter into the seed. Each call
+    increments the counter, producing a new unique key.
 
     Args:
       params: The params container.
@@ -1100,13 +1029,7 @@ class Rng(Module):
       KeyError: If this Rng is not initialized. Use rng.seed(params, seed=...)
         first.
     """
-    # Get seed, optionally with auto-folding.
     key = self.get_seed(params)
-    if self.auto_fold_in_axes:
-      axis_index = _auto_axis_index()
-      if axis_index is not None:
-        key = jax.random.fold_in(key, axis_index)
-
     counter = self.get_counter(params)
 
     # Fold in the counter to obtain a new deterministic key and increment.

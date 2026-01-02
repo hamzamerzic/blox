@@ -192,41 +192,131 @@ def train_step(params, inputs, targets):
 
 ## 🔀 Batching & Parallel RNG
 
-Here is a sharp edge in JAX: if you `vmap` a function that uses random numbers, every batch element will typically get the *same* random seed unless you handle it explicitly. This means your dropout masks would be identical across the whole batch.
+Here is a sharp edge in JAX: if you `vmap` or `shard_map` a function that uses random numbers, every batch element/device gets the *same* random key by default. This means your dropout masks would be identical across the whole batch.
 
-**blox** handles this for you.
+**blox** does not hide this behavior from you. Instead, we give you the tools to handle it explicitly.
 
-When you use an `Rng` with `auto_fold_in_axes=True` (the default), we detect when you are inside a `vmap` or `shard_map` and automatically "fold in" the axis index into the RNG key. This ensures every batch element gets unique randomness.
+### Understanding JAX's Counter-Based PRNG
 
-Because we rely on JAX internals to find the active axes, **you must provide `axis_name` to your `vmap` calls**.
+JAX's PRNG is stateless and deterministic. When you call `rng(params)`, the returned key is computed as:
 
 ```python
-rng = bx.Rng(graph.child('rng'))  # auto_fold_in_axes=True by default.
+new_key = jax.random.fold_in(seed, counter)
+```
+
+The `seed` is fixed at initialization, and the `counter` increments with each call. This means:
+
+- **Same seed + same counter = same key** (always)
+- **Different counter = different key** (even with same seed)
+
+In parallel contexts (`vmap`, `shard_map`), all lanes share the same seed and counter, so they all get identical keys. To get unique randomness per lane, you must "fold in" the lane index.
+
+### The Manual Folding Pattern
+
+The simplest way to understand RNG folding is to pass the batch index explicitly:
+
+```python
+graph = bx.Graph('root')
+rng = bx.Rng(graph.child('rng'))
 dropout = bx.Dropout(graph.child('dropout'), rate=0.5, rng=rng)
 
-def apply(params, x):
-  return dropout(params, x, is_training=True)
+def apply_with_explicit_index(params, x, batch_idx):
+  # Fold in the batch index to get a unique seed for this lane.
+  original_seed = rng.get_seed(params)
+  folded_seed = jax.random.fold_in(original_seed, batch_idx)
+  params = rng.seed(params, seed=folded_seed)
 
-# axis_name is required so blox can detect the batch axis.
+  out, params = dropout(params, x, is_training=True)
+
+  # Restore original seed (required for replicated params).
+  params = rng.seed(params, seed=original_seed)
+  return out, params
+
+# Pass jnp.arange(batch_size) as the index.
+batch_indices = jnp.arange(4)
 outputs, _ = jax.vmap(
-    apply,
+    apply_with_explicit_index,
+    in_axes=(None, 0, 0),
+    out_axes=(0, None),
+)(params, batch_inputs, batch_indices)
+```
+
+When using `axis_name` with vmap, you can use `jax.lax.axis_index` instead of threading the index through your code:
+
+```python
+def apply_with_axis_index(params, x):
+  original_seed = rng.get_seed(params)
+  folded_seed = jax.random.fold_in(
+      original_seed, jax.lax.axis_index('batch')
+  )
+  params = rng.seed(params, seed=folded_seed)
+
+  out, params = dropout(params, x, is_training=True)
+
+  params = rng.seed(params, seed=original_seed)
+  return out, params
+
+# axis_name is required for jax.lax.axis_index.
+outputs, _ = jax.vmap(
+    apply_with_axis_index,
     in_axes=(None, 0),
     out_axes=(0, None),
-    axis_name='batch' # <--- Crucial!
+    axis_name='batch'
 )(params, batch_inputs)
 ```
 
-**The "Magic" Explained:**
-If you disable this feature (`auto_fold_in_axes=False`), you are back to raw JAX behavior. To get unique randomness per sample manually, you would need to manually fold the axis index into the seed *before* updating the params, like this:
+### Why Restore the Original Seed?
+
+When `params` is replicated across lanes (`out_axes=None`), JAX requires all lanes to return identical pytrees. If each lane has a different folded seed, JAX will error.
+
+Since we're running the same function in each lane, the counter increments by the same amount everywhere. The seed is the only thing that differs (due to folding), so restoring the original seed ensures the params are identical across all lanes.
+
+### Init vs Runtime
+
+During **initialization**, you typically want identical params across all batch elements, so you do NOT fold in the axis index.
+
+During **runtime**, you want unique randomness per batch element (for dropout, etc.), so you DO fold in the axis index.
+
+You can use `params._locked` to detect which mode you're in:
 
 ```python
-# Manual equivalent of what blox does automatically:
-seed = rng.get_seed(params)
-seed = jax.random.fold_in(seed, jax.lax.axis_index('batch'))
-params = rng.seed(params, seed)
+def forward(params, x):
+  is_runtime = params._locked
+
+  if is_runtime:
+    # Runtime: fold in axis index for unique randomness.
+    original_seed = rng.get_seed(params)
+    folded_seed = jax.random.fold_in(
+        original_seed, jax.lax.axis_index('batch')
+    )
+    params = rng.seed(params, seed=folded_seed)
+
+  out, params = dropout(params, x, is_training=is_runtime)
+
+  if is_runtime:
+    # Restore original seed for replicated params.
+    params = rng.seed(params, seed=original_seed)
+
+  return out, params
+
+# Init phase: params are unlocked, no folding.
+def init(x):
+  params = rng.seed(bx.Params(), seed=42)
+  _, params = forward(params, x)
+  return params.locked()
+
+# Both init and runtime use the same vmap.
+params = jax.vmap(init, axis_name='batch', out_axes=None)(batch_inputs)
+
+# Runtime phase: params are locked, folding is applied.
+outputs, _ = jax.vmap(
+    forward,
+    in_axes=(None, 0),
+    axis_name='batch'
+)(params, batch_inputs)
 ```
 
-This is the only automatic behavior that we provide by default, because we've identified it to be a very common source of silent bugs.
+This pattern lets you use the same `forward` function for both initialization and runtime.
 
 ## 📈 Scaling Up
 

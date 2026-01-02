@@ -1,4 +1,9 @@
-"""Tests for shard_map compatibility with sharded models."""
+"""Tests for shard_map compatibility with sharded models.
+
+Without manual RNG folding, all devices get the SAME random keys.
+This is expected JAX behavior - users must manually fold in axis indices
+to get unique randomness per device.
+"""
 
 import blox as bx
 import chex
@@ -204,22 +209,21 @@ def test_sharded_mlp_tensor_parallel():
 
 
 # =============================================================================
-# auto_fold_in_axes behavior: init vs runtime
+# Init behavior: same params without manual folding
 # =============================================================================
 
 
 def test_shard_map_init_produces_same_params():
   """Init inside shard_map produces same params across devices.
 
-  auto_fold_in_axes is NOT applied during param initialization - all devices
-  get identical params. This is intentional: for sharded models, use jit for
-  initialization (which handles RNG partitioning automatically) rather than
-  shard_map. auto_fold_in_axes only applies at runtime (e.g., dropout).
+  Without manual axis folding, all devices get identical params. This is
+  expected: for sharded models, use jit for initialization (which handles
+  RNG partitioning automatically) rather than shard_map.
   """
   mesh = jax.make_mesh((4,), ('model',))
 
   graph = bx.Graph('root')
-  rng = bx.Rng(graph.child('rng'), auto_fold_in_axes=True)
+  rng = bx.Rng(graph.child('rng'))
   linear = bx.Linear(
       graph.child('linear'),
       output_size=4,
@@ -229,77 +233,16 @@ def test_shard_map_init_produces_same_params():
   )
 
   def init_model(x):
-    params = rng.seed(bx.Params(), seed=42)
-    _, params = linear(params, x)
-    # Also get a runtime key to verify auto_fold_in_axes works there.
-    key, params = rng(params)
-    # Add dimension for sharding.
-    return key[None], params.locked()
-
-  x_sample = jnp.ones((1, 3))
-
-  # Get structure.
-  _, params_structure = jax.eval_shape(init_model, x_sample)
-  param_specs = get_partition_spec(params_structure)
-
-  @jax.jit
-  @jax.shard_map(
-      mesh=mesh,
-      in_specs=P(),
-      out_specs=(P('model'), param_specs),
-  )
-  def init_sharded(x):
-    return init_model(x)
-
-  keys, params = init_sharded(x_sample)
-
-  # === Verification ===
-  # Params should be identical across devices.
-  kernel_shards = params._data[
-      ('root', 'linear', 'kernel')
-  ].value.addressable_shards
-  kernel_shard_data = [np.asarray(s.data) for s in kernel_shards]
-  assert np.allclose(
-      kernel_shard_data[0], kernel_shard_data[1]
-  ), 'Params should be identical across devices during init'
-
-  # Keys should differ due to auto_fold_in_axes at runtime.
-  for i in range(1, 4):
-    assert not jnp.array_equal(
-        keys[0], keys[i]
-    ), 'Runtime keys should differ across devices with auto_fold_in_axes'
-
-
-def test_init_without_auto_fold_in_axes_produces_same_params():
-  """Init inside shard_map WITHOUT auto_fold_in_axes produces identical params.
-
-  When auto_fold_in_axes=False, all devices use the same RNG sequence,
-  resulting in identical parameters (which is usually wrong for sharded init).
-  """
-  mesh = jax.make_mesh((4,), ('model',))
-
-  graph = bx.Graph('root')
-  rng = bx.Rng(graph.child('rng'), auto_fold_in_axes=False)
-  linear = bx.Linear(
-      graph.child('linear'),
-      output_size=4,
-      rng=rng,
-      kernel_metadata={'sharding': ('model',)},
-      bias_metadata={'sharding': ('model',)},
-  )
-
-  # Same init function for eval_shape and shard_map.
-  def init_model(x):
-    # No auto_fold_in_axes = all devices use same RNG sequence.
     params = rng.seed(bx.Params(), seed=42)
     _, params = linear(params, x)
     return params.locked()
 
   x_sample = jnp.ones((1, 3))
+
+  # Get structure.
   params_structure = jax.eval_shape(init_model, x_sample)
   param_specs = get_partition_spec(params_structure)
 
-  # Init WITHOUT auto_fold_in_axes - all devices get same params.
   @jax.jit
   @jax.shard_map(
       mesh=mesh,
@@ -311,28 +254,15 @@ def test_init_without_auto_fold_in_axes_produces_same_params():
 
   params = init_sharded(x_sample)
 
-  # Apply to get output.
-  @jax.jit
-  @jax.shard_map(
-      mesh=mesh,
-      in_specs=(param_specs, P()),
-      out_specs=(P('model', None), param_specs),
-  )
-  def apply_model(params, x):
-    out, params = linear(params, x)
-    return out, params
-
-  out, _ = apply_model(params, x_sample)
-
   # === Verification ===
-  # All devices should have identical weights (wrong for sharded init!).
+  # All devices should have identical weights (no manual folding).
   kernel_shards = params._data[
       ('root', 'linear', 'kernel')
   ].value.addressable_shards
   kernel_shard_data = [np.asarray(s.data) for s in kernel_shards]
   assert np.allclose(
       kernel_shard_data[0], kernel_shard_data[1]
-  ), 'Without auto_fold_in_axes, all devices should have same weights'
+  ), 'Params should be identical across devices without manual folding'
 
 
 # =============================================================================
@@ -381,16 +311,16 @@ def test_layernorm_cross_device():
 
 
 # =============================================================================
-# Dropout with device-unique masks via auto_fold_in_axes
+# RNG behavior: same keys without manual folding
 # =============================================================================
 
 
-def test_dropout_with_auto_fold_in_axes_different_masks():
-  """Dropout with auto_fold_in_axes produces different masks per device."""
+def test_dropout_same_masks_without_manual_folding():
+  """Dropout produces same mask on all devices without manual folding."""
   mesh = jax.make_mesh((4,), ('batch',))
 
   graph = bx.Graph('root')
-  rng = bx.Rng(graph.child('rng'), auto_fold_in_axes=True)
+  rng = bx.Rng(graph.child('rng'))
   dropout = bx.Dropout(graph.child('dropout'), rate=0.5, rng=rng)
 
   @jax.jit
@@ -399,99 +329,90 @@ def test_dropout_with_auto_fold_in_axes_different_masks():
       in_specs=P('batch', None),
       out_specs=P('batch', None),
   )
-  def apply_dropout_with_auto_fold(x):
-    # auto_fold_in_axes causes device-unique RNG.
+  def apply_dropout(x):
     params = rng.seed(bx.Params(), seed=42)
     out, _ = dropout(params, x, is_training=True)
     return out
 
   x = jnp.ones((8, 16))
-  out = apply_dropout_with_auto_fold(x)
+  out = apply_dropout(x)
 
   # === Verification ===
-  out_per_device = out.reshape(4, 2, 16)
-  zeros_per_device = [int(jnp.sum(out_per_device[i] == 0.0)) for i in range(4)]
-  assert not all(
-      z == zeros_per_device[0] for z in zeros_per_device
-  ), 'Different devices should have different dropout masks with auto_fold_in_axes'
-
-
-def test_dropout_without_auto_fold_in_axes_same_masks():
-  """Dropout without auto_fold_in_axes produces same mask on all devices."""
-  mesh = jax.make_mesh((4,), ('batch',))
-
-  graph = bx.Graph('root')
-  rng = bx.Rng(graph.child('rng'), auto_fold_in_axes=False)
-  dropout = bx.Dropout(graph.child('dropout'), rate=0.5, rng=rng)
-
-  @jax.jit
-  @jax.shard_map(
-      mesh=mesh,
-      in_specs=P('batch', None),
-      out_specs=P('batch', None),
-  )
-  def apply_dropout_no_fold(x):
-    # No auto_fold_in_axes = same RNG on all devices.
-    params = rng.seed(bx.Params(), seed=42)
-    out, _ = dropout(params, x, is_training=True)
-    return out
-
-  x = jnp.ones((8, 16))
-  out = apply_dropout_no_fold(x)
-
-  # === Verification ===
+  # All devices have SAME dropout mask (no axis folding).
   out_per_device = out.reshape(4, 2, 16)
   for i in range(1, 4):
     assert jnp.allclose(
         out_per_device[0], out_per_device[i]
-    ), 'Without auto_fold_in_axes, all devices should have same dropout mask'
+    ), 'Without manual folding, all devices should have same dropout mask'
 
 
 # =============================================================================
-# Mixed shard_map + vmap combinations
+# Manual RNG folding pattern for shard_map
 # =============================================================================
 
 
-def test_shard_map_with_inner_vmap():
-  """shard_map with named vmap inside produces unique keys."""
-  mesh = jax.make_mesh((4,), ('x',))
+def test_manual_folding_produces_different_masks():
+  """Manual axis folding produces different dropout masks per device."""
+  mesh = jax.make_mesh((4,), ('batch',))
 
   graph = bx.Graph('root')
-  rng = bx.Rng(graph.child('rng'), auto_fold_in_axes=True)
+  rng = bx.Rng(graph.child('rng'))
+  dropout = bx.Dropout(graph.child('dropout'), rate=0.5, rng=rng)
 
-  def get_key(x):
-    params = rng.seed(bx.Params(), seed=42)
-    key, _ = rng(params)
-    return key
-
+  @jax.jit
   @jax.shard_map(
       mesh=mesh,
-      in_specs=P('x'),
-      out_specs=P('x'),
+      in_specs=P('batch', None),
+      out_specs=P('batch', None),
   )
-  def sharded_fn(y):
-    # Named vmap inside shard_map.
-    return jax.vmap(get_key, axis_name='v_inner')(y[0])[None]
+  def apply_dropout_with_folding(x):
+    params = rng.seed(bx.Params(), seed=42)
 
-  x = jnp.zeros((4, 2, 6))
-  keys = sharded_fn(x)
+    # Manual folding pattern:
+    # 1. Get the original seed
+    original_seed = rng.get_seed(params)
 
-  # All 8 keys should be unique (4 shards * 2 vmap positions).
-  flat = keys.reshape(8, -1)
-  for i in range(8):
-    for j in range(i + 1, 8):
-      assert not jnp.array_equal(flat[i], flat[j])
+    # 2. Fold in the axis index to get a unique seed per device
+    folded_seed = jax.random.fold_in(original_seed, jax.lax.axis_index('batch'))
+
+    # 3. Update params with the folded seed
+    params = rng.seed(params, seed=folded_seed)
+
+    # 4. Now dropout produces unique masks per device
+    out, _ = dropout(params, x, is_training=True)
+    return out
+
+  x = jnp.ones((8, 16))
+  out = apply_dropout_with_folding(x)
+
+  # === Verification ===
+  # Different devices should have DIFFERENT dropout masks.
+  out_per_device = out.reshape(4, 2, 16)
+  zeros_per_device = [int(jnp.sum(out_per_device[i] == 0.0)) for i in range(4)]
+  assert not all(
+      z == zeros_per_device[0] for z in zeros_per_device
+  ), 'With manual folding, different devices should have different masks'
 
 
-def test_jit_shard_map_with_inner_vmap():
-  """JIT(shard_map(vmap)) produces unique keys."""
-  mesh = jax.make_mesh((4,), ('x',))
+def test_manual_folding_in_shard_map_with_vmap():
+  """Manual folding works with shard_map + nested vmap."""
+  mesh = jax.make_mesh((2,), ('x',))
 
   graph = bx.Graph('root')
-  rng = bx.Rng(graph.child('rng'), auto_fold_in_axes=True)
+  rng = bx.Rng(graph.child('rng'))
 
-  def get_key(x):
+  def get_key_with_folding(x):
     params = rng.seed(bx.Params(), seed=42)
+
+    # Fold in both shard and vmap axes.
+    original_seed = rng.get_seed(params)
+    shard_idx = jax.lax.axis_index('x')
+    vmap_idx = jax.lax.axis_index('v_inner')
+
+    folded_seed = jax.random.fold_in(original_seed, shard_idx)
+    folded_seed = jax.random.fold_in(folded_seed, vmap_idx)
+
+    params = rng.seed(params, seed=folded_seed)
     key, _ = rng(params)
     return key
 
@@ -502,102 +423,13 @@ def test_jit_shard_map_with_inner_vmap():
       out_specs=P('x'),
   )
   def sharded_fn(y):
-    return jax.vmap(get_key, axis_name='v_inner')(y[0])[None]
+    return jax.vmap(get_key_with_folding, axis_name='v_inner')(y[0])[None]
 
-  x = jnp.zeros((4, 2, 6))
+  x = jnp.zeros((2, 3, 6))
   keys = sharded_fn(x)
 
-  # All 8 keys should be unique.
-  flat = keys.reshape(8, -1)
-  for i in range(8):
-    for j in range(i + 1, 8):
+  # All 6 keys should be unique (2 shards * 3 vmap positions).
+  flat = keys.reshape(6, -1)
+  for i in range(6):
+    for j in range(i + 1, 6):
       assert not jnp.array_equal(flat[i], flat[j])
-
-
-def test_shard_map_jit_vmap():
-  """shard_map(jit(vmap)) produces unique keys."""
-  mesh = jax.make_mesh((4,), ('x',))
-
-  graph = bx.Graph('root')
-  rng = bx.Rng(graph.child('rng'), auto_fold_in_axes=True)
-
-  def get_key(x):
-    params = rng.seed(bx.Params(), seed=42)
-    key, _ = rng(params)
-    return key
-
-  @jax.shard_map(
-      mesh=mesh,
-      in_specs=P('x'),
-      out_specs=P('x'),
-  )
-  @jax.jit
-  def sharded_fn(y):
-    return jax.vmap(get_key, axis_name='v_inner')(y[0])[None]
-
-  x = jnp.zeros((4, 2, 6))
-  keys = sharded_fn(x)
-
-  # All 8 keys should be unique.
-  flat = keys.reshape(8, -1)
-  for i in range(8):
-    for j in range(i + 1, 8):
-      assert not jnp.array_equal(flat[i], flat[j])
-
-
-def test_scan_with_shard_map():
-  """lax.scan with shard_map inside produces unique keys."""
-  mesh = jax.make_mesh((2,), ('y',))
-
-  graph = bx.Graph('root')
-  rng = bx.Rng(graph.child('rng'), auto_fold_in_axes=True)
-
-  def get_key(x):
-    params = rng.seed(bx.Params(), seed=42)
-    key, _ = rng(params)
-    return key
-
-  def scan_body(carry, chunk):
-    i = carry
-    sharded_result = jax.shard_map(
-        lambda y: get_key(y)[None],
-        mesh=mesh,
-        in_specs=P('y'),
-        out_specs=P('y'),
-    )(chunk)
-    return i + 1, sharded_result.flatten()
-
-  x = jnp.zeros((4, 2, 6))
-  _, keys = jax.lax.scan(scan_body, 0, x)
-
-  # Keys should be different per shard within each step.
-  for step in range(4):
-    assert not jnp.array_equal(keys[step, 0], keys[step, 1])
-
-
-def test_unnamed_vmap_inside_shard_map_fails():
-  """Unnamed vmap inside shard_map fails with auto_fold_in_axes."""
-  import pytest
-
-  mesh = jax.make_mesh((4,), ('x',))
-
-  graph = bx.Graph('root')
-  rng = bx.Rng(graph.child('rng'), auto_fold_in_axes=True)
-
-  def get_key(x):
-    params = rng.seed(bx.Params(), seed=42)
-    key, _ = rng(params)
-    return key
-
-  @jax.shard_map(
-      mesh=mesh,
-      in_specs=P('x'),
-      out_specs=P('x'),
-  )
-  def sharded_fn(y):
-    # Unnamed vmap inside shard_map should fail.
-    return jax.vmap(get_key)(y[0])[None]
-
-  x = jnp.zeros((4, 2, 6))
-  with pytest.raises(ValueError, match='Unnamed vmap detected'):
-    sharded_fn(x)
