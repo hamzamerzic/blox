@@ -339,22 +339,20 @@ def test_init_vs_runtime_folding_pattern():
   dropout = bx.Dropout(graph.child('dropout'), rate=0.5, rng=rng)
 
   def forward(params, x):
-    # Check if we're in init mode (unlocked) or runtime mode (locked).
-    is_runtime = params._locked
+    original_seed = rng.get_seed(params)
 
-    if is_runtime:
+    # Check if we're in init mode (unlocked) or runtime mode (locked).
+    if params.is_locked:
       # Runtime: fold in axis index for unique randomness per lane.
-      original_seed = rng.get_seed(params)
       folded_seed = jax.random.fold_in(
           original_seed, jax.lax.axis_index('batch')
       )
       params = rng.seed(params, seed=folded_seed)
 
-    out, params = dropout(params, x, is_training=is_runtime)
+    out, params = dropout(params, x, is_training=True)
 
-    if is_runtime:
-      # Restore original seed before returning (for replicated params).
-      params = rng.seed(params, seed=original_seed)
+    # Restore original seed (no-op during init, required for runtime).
+    params = rng.seed(params, seed=original_seed)
 
     return out, params
 

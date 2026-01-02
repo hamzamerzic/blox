@@ -101,7 +101,40 @@ Or use ``jax.lax.axis_index`` with ``axis_name``:
 
 **Why restore the seed?** When params is replicated (``out_axes=None``), JAX requires all lanes to return identical pytrees. Since we run the same function in each lane, the counter increments identically everywhere. The seed is the only thing that differs (due to folding), so restoring it ensures params match.
 
-**Init vs Runtime:** During init (params unlocked), don't fold—you want identical params. During runtime (params locked), do fold for unique randomness. Use ``params._locked`` to detect which mode.
+**Init vs Runtime:** During init (params unlocked), don't fold—you want identical params. During runtime (params locked), do fold for unique randomness. Use ``params.is_locked`` to detect which mode.
+
+Initialization with Sharded Parameters
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+When initializing models with sharded parameters, **use** ``jax.jit`` **with** ``out_shardings`` **rather than** ``shard_map``.
+
+Why ``shard_map`` is tricky for initialization:
+
+* Different parameters may need different axes folded in (e.g., model axis but not batch axis)
+* Multiple model axes mean different params have different sharding requirements
+* Managing which axes to fold for which params becomes complex
+
+Why ``jax.jit`` is better:
+
+* Just specify ``out_shardings`` and JIT handles partitioning
+* Use replicated RNG params during init
+* JIT is smart about parameter placement during initialization
+
+.. code-block:: python
+
+   # RECOMMENDED: Initialize via JIT with out_shardings
+   mesh = jax.make_mesh((4,), ('model',))
+   params_sharding = ...  # Build from param metadata
+
+   @jax.jit(out_shardings=params_sharding)
+   def init():
+       params = rng.seed(bx.Params(), seed=42)
+       _, params = model(params, dummy_input)
+       return params.locked()
+
+   params = init()  # JIT handles sharding automatically
+
+**Note:** These RNG patterns are a sharp edge in JAX that blox inherits. We hope JAX will provide better primitives in the future.
 
 The Params Container
 --------------------
@@ -225,3 +258,39 @@ By accepting slightly more verbose function signatures, you gain:
 1. **Total transparency:** You know exactly what data your function touches.
 2. **Full control:** No global state means no unknown side-effects.
 3. **Maximum performance:** Zero overhead.
+
+Decoupled Params and Graph
+--------------------------
+
+A key design principle in blox is the **clean separation between parameters and the model graph**. This is different from frameworks like Flax or Equinox where parameters are tightly coupled to modules.
+
+**Multiple models can share the same params:**
+
+.. code-block:: python
+
+   # Create two LSTM variants with the same parameter structure
+   def create_lstm(is_static: bool):
+       graph = bx.Graph('model')
+       rng = bx.Rng(graph.child('rng'))
+       lstm = bx.LSTM(graph.child('lstm'), hidden_size=64, rng=rng, is_static=is_static)
+       return lstm
+
+   lstm_static = create_lstm(is_static=True)    # Python loop (debuggable)
+   lstm_dynamic = create_lstm(is_static=False)  # lax.scan (fast)
+
+   # Initialize params once
+   params = ...
+
+   # Both models work with the same params!
+   out_static, _ = lstm_static.apply(params, inputs, prev_state=state)
+   out_dynamic, _ = lstm_dynamic.apply(params, inputs, prev_state=state)
+
+**Why this matters:**
+
+1. **Actor/Learner pattern**: In RL, the Actor (collects data) and Learner (updates weights) can be separate models sharing params.
+
+2. **Train/Eval pattern**: Training model (with dropout) and evaluation model (without) share the same params.
+
+3. **Static graph preference**: Since multiple models can share params, blox recommends using factory functions to create model variants rather than modifying modules after creation.
+
+4. **LoRA-aware design**: Instead of monkey-patching LoRA onto existing models, design your model to support LoRA from the start. This keeps the structure explicit and visualization accurate.

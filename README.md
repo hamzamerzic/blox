@@ -192,7 +192,9 @@ def train_step(params, inputs, targets):
 
 ## 🔀 Batching & Parallel RNG
 
-Here is a sharp edge in JAX: if you `vmap` or `shard_map` a function that uses random numbers, every batch element/device gets the *same* random key by default. This means your dropout masks would be identical across the whole batch.
+> **⚠️ JAX Sharp Edge**: This section describes patterns needed due to JAX's PRNG design, not blox design decisions. The main sharp edge is around **initialization with `shard_map`** where different parameters may need different sharding. For `vmap` the patterns are straightforward once understood.
+
+Here is a sharp edge in JAX: if you `vmap` or `shard_map` a function that uses random numbers, every batch element/device gets the *same* random key by default. This means your dropout masks would be identical across the whole batch—defeating the purpose of dropout entirely.
 
 **blox** does not hide this behavior from you. Instead, we give you the tools to handle it explicitly.
 
@@ -277,13 +279,14 @@ During **initialization**, you typically want identical params across all batch 
 
 During **runtime**, you want unique randomness per batch element (for dropout, etc.), so you DO fold in the axis index.
 
-You can use `params._locked` to detect which mode you're in:
+You can use `params.is_locked` to detect which mode you're in:
 
 ```python
 def forward(params, x):
-  is_runtime = params._locked
+  original_seed = rng.get_seed(params)
 
-  if is_runtime:
+  # Check if we're in init mode (unlocked) or runtime mode (locked).
+  if params.is_locked:
     # Runtime: fold in axis index for unique randomness.
     original_seed = rng.get_seed(params)
     folded_seed = jax.random.fold_in(
@@ -291,11 +294,10 @@ def forward(params, x):
     )
     params = rng.seed(params, seed=folded_seed)
 
-  out, params = dropout(params, x, is_training=is_runtime)
+  out, params = dropout(params, x, is_training=True)
 
-  if is_runtime:
-    # Restore original seed for replicated params.
-    params = rng.seed(params, seed=original_seed)
+  # Restore original seed (no-op during init, required for runtime).
+  params = rng.seed(params, seed=original_seed)
 
   return out, params
 
@@ -317,6 +319,34 @@ outputs, _ = jax.vmap(
 ```
 
 This pattern lets you use the same `forward` function for both initialization and runtime.
+
+<details>
+<summary><strong>Why use JIT instead of shard_map for initialization?</strong></summary>
+
+When initializing models with sharded parameters, **use `jax.jit` with `out_shardings` rather than `shard_map`**.
+
+`shard_map` is tricky for initialization because:
+- Different parameters may need different axes folded in (e.g., model axis but not batch axis)
+- Multiple model axes mean different params have different sharding requirements
+- Managing which axes to fold for which params becomes complex
+
+`jax.jit` is better because:
+- Just specify `out_shardings` and JIT handles partitioning automatically
+- Use replicated RNG params during init
+- JIT is smart about parameter placement during initialization
+
+```python
+# RECOMMENDED: Initialize via JIT with out_shardings
+@jax.jit(out_shardings=params_sharding)
+def init():
+    params = rng.seed(bx.Params(), seed=42)
+    _, params = model(params, dummy_input)
+    return params.locked()
+
+params = init()  # JIT handles sharding automatically
+```
+
+</details>
 
 ## 📈 Scaling Up
 
@@ -431,6 +461,30 @@ By accepting slightly more verbose function signatures, you gain:
 1. **Total transparency:** You know exactly what data your function touches.
 2. **Full control:** No global state means no unknown side-effects.
 3. **Maximum performance:** Zero overhead.
+
+## 🔀 Decoupled Params and Graph
+
+A key design principle is the **clean separation between parameters and the model graph**. Unlike Flax or Equinox where params are tightly coupled to modules, blox lets multiple models share the same params:
+
+```python
+# Create two LSTM variants with the same parameter structure
+def create_lstm(is_static: bool):
+    graph = bx.Graph('model')
+    rng = bx.Rng(graph.child('rng'))
+    return bx.LSTM(graph.child('lstm'), hidden_size=64, rng=rng, is_static=is_static)
+
+lstm_debug = create_lstm(is_static=True)   # Python loop (debuggable)
+lstm_fast = create_lstm(is_static=False)   # lax.scan (production)
+
+# Both models work with the SAME params!
+out_debug, _ = lstm_debug.apply(params, inputs, prev_state=state)
+out_fast, _ = lstm_fast.apply(params, inputs, prev_state=state)
+```
+
+**Why this matters:**
+- **Actor/Learner in RL**: Separate models for data collection and training, sharing weights
+- **Train/Eval modes**: Different dropout behavior, same parameters
+- **LoRA adapters**: Design models LoRA-aware from the start rather than monkey-patching
 
 ## 📄 License
 
