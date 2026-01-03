@@ -218,6 +218,17 @@ class Param:
       trainable: bool = True,
       metadata: dict[str, Any] | None = None,
   ) -> None:
+    # Runtime validation for trainable and metadata.
+    # Note: We don't validate value because JAX tree operations (like tree_map)
+    # need to create Params with arbitrary mapped values (e.g., shapes).
+    if not isinstance(trainable, bool):
+      raise TypeError(
+          f'trainable must be a bool, got {type(trainable).__name__}.'
+      )
+    if metadata is not None and not isinstance(metadata, dict):
+      raise TypeError(
+          f'metadata must be a dict or None, got {type(metadata).__name__}.'
+      )
     self.value = value
     self.trainable = trainable
     self.metadata = metadata or {}
@@ -553,6 +564,10 @@ class Params:
       raise ValueError(
           'At least one of value, trainable, or metadata must be provided.'
       )
+
+    # Validate value is a JAX array when provided.
+    if value is not None and not isinstance(value, jax.Array):
+      raise TypeError(f'value must be a jax.Array, got {type(value).__name__}.')
 
     p = self._clone()
     existing = self._data[path]
