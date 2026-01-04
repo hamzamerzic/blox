@@ -13,6 +13,9 @@ extensions = [
     'nbsphinx',
 ]
 
+# Don't execute notebooks during build (some require Colab/GPU).
+nbsphinx_execute = 'never'
+
 templates_path = ['_templates']
 exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store']
 

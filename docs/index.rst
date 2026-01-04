@@ -29,7 +29,9 @@ Parameters go in, outputs and updated parameters come out. Because state flows e
    :maxdepth: 2
    :caption: Advanced Topics
 
+   checkpointable_training
    lora_example
+   sharp_bits
 
 .. toctree::
    :maxdepth: 2

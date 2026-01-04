@@ -71,7 +71,7 @@ class Linear(bx.Module):
         params,
         name='kernel',
         shape=(x.shape[-1], self.output_size),
-        init=jax.nn.initializers.glorot_uniform(),
+        init=jax.nn.initializers.normal(),
         rng=self.rng,
     )
     bias, params = self.get_param(
@@ -99,7 +99,7 @@ class MLP(bx.Module):
       rng: bx.Rng,
   ):
     super().__init__(graph)
-    # graph.child('name') creates a unique path for parameters
+    # graph.child('name') creates a unique path for each parameter.
     self.hidden = Linear(graph.child('hidden'), hidden_size, rng=rng)
     self.output = Linear(graph.child('output'), output_size, rng=rng)
 
@@ -120,7 +120,7 @@ rng = bx.Rng(graph.child('rng'))
 model = MLP(graph.child('mlp'), hidden_size=128, output_size=10, rng=rng)
 
 # Initialize the parameter container and initialize the RNG state (seed).
-# We need the RNG to initialize parameters so we initialize it first.
+# We initialize the RNG first since we use it to initialize other modules.
 params = bx.Params()
 params = rng.seed(params, seed=42)
 
@@ -243,7 +243,7 @@ outputs, _ = jax.vmap(
 )(params, batch_inputs, batch_indices)
 ```
 
-When using `axis_name` with vmap, you can use `jax.lax.axis_index` instead of threading the index through your code:
+When using `axis_name` with vmap, you can use `jax.lax.axis_index` instead of threading the index through your code. **This is the recommended approach** as it's more idiomatic:
 
 ```python
 def apply_with_axis_index(params, x):

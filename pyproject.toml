@@ -40,6 +40,7 @@ dev = [
     "ruff",        # For modern linting
     "pyrefly",     # For type checking
     "pyink",       # For formatting
+    "tensorflow",  # For resumable dataset tests
 ]
 
 [tool.hatch.build.targets.wheel]

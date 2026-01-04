@@ -85,7 +85,7 @@ Simplest approach - pass the index explicitly:
    # Pass jnp.arange(batch_size) as the batch indices
    jax.vmap(apply_with_explicit_index, in_axes=(None, 0, 0))(params, x, jnp.arange(4))
 
-Or use ``jax.lax.axis_index`` with ``axis_name``:
+Or use ``jax.lax.axis_index`` with ``axis_name``. **This is the recommended approach** as it's more idiomatic:
 
 .. code-block:: python
 
@@ -301,8 +301,6 @@ A key design principle in blox is the **clean separation between parameters and 
 
 **Design recommendations:**
 
-3. **Create static models with deliberate purpose.** Use factory functions to create model variants at construction time. Each model's purpose should be clear from how it's built, not from runtime modifications.
+1. **Create static models with deliberate purpose.** Use factory functions to create model variants at construction time. Each model's purpose should be clear from how it's built, not from runtime modifications.
 
-4. **LoRA-aware design**: Instead of monkey-patching LoRA onto existing models, design your model to support LoRA from the start. This keeps the structure explicit and visualization accurate.
-
-5. **Avoid runtime graph mutation.** While users have freedom to manipulate the graph, a clean design creates different models for different purposes rather than mutating one model at runtime.
+2. **Avoid runtime graph mutation.** While users have freedom to manipulate the graph, a clean design creates different models for different purposes rather than mutating one model at runtime.
