@@ -136,7 +136,7 @@ def test_sharded_linear_data_parallel():
     out, params = linear(params, x)
     return out, params
 
-  x = jnp.ones((8, 3))
+  x = jax.device_put(jnp.ones((8, 3)), NamedSharding(mesh, P('batch', None)))
   out, out_params = apply_data_parallel(sharded_params, x)
   assert out.shape == (8, 4)
 
@@ -301,6 +301,7 @@ def test_layernorm_cross_device():
     out, _ = ln(params, x)
     return out
 
+  x = jax.device_put(x, NamedSharding(mesh, P('batch', None)))
   out = apply_ln(params, x)
 
   # === Verification ===
@@ -334,15 +335,17 @@ def test_dropout_same_masks_without_manual_folding():
     out, _ = dropout(params, x, is_training=True)
     return out
 
-  x = jnp.ones((8, 16))
+  x = jax.device_put(
+      jnp.ones((8, 16)), NamedSharding(mesh, P('batch', None))
+  )
   out = apply_dropout(x)
 
   # === Verification ===
   # All devices have SAME dropout mask (no axis folding).
-  out_per_device = out.reshape(4, 2, 16)
+  out_np = np.asarray(out).reshape(4, 2, 16)
   for i in range(1, 4):
-    assert jnp.allclose(
-        out_per_device[0], out_per_device[i]
+    np.testing.assert_allclose(
+        out_np[0], out_np[i]
     ), 'Without manual folding, all devices should have same dropout mask'
 
 
@@ -382,13 +385,15 @@ def test_manual_folding_produces_different_masks():
     out, _ = dropout(params, x, is_training=True)
     return out
 
-  x = jnp.ones((8, 16))
+  x = jax.device_put(
+      jnp.ones((8, 16)), NamedSharding(mesh, P('batch', None))
+  )
   out = apply_dropout_with_folding(x)
 
   # === Verification ===
   # Different devices should have DIFFERENT dropout masks.
-  out_per_device = out.reshape(4, 2, 16)
-  zeros_per_device = [int(jnp.sum(out_per_device[i] == 0.0)) for i in range(4)]
+  out_np = np.asarray(out).reshape(4, 2, 16)
+  zeros_per_device = [int(np.sum(out_np[i] == 0.0)) for i in range(4)]
   assert not all(
       z == zeros_per_device[0] for z in zeros_per_device
   ), 'With manual folding, different devices should have different masks'
@@ -425,11 +430,11 @@ def test_manual_folding_in_shard_map_with_vmap():
   def sharded_fn(y):
     return jax.vmap(get_key_with_folding, axis_name='v_inner')(y[0])[None]
 
-  x = jnp.zeros((2, 3, 6))
+  x = jax.device_put(jnp.zeros((2, 3, 6)), NamedSharding(mesh, P('x', None, None)))
   keys = sharded_fn(x)
 
   # All 6 keys should be unique (2 shards * 3 vmap positions).
-  flat = keys.reshape(6, -1)
+  keys_np = np.asarray(jax.random.key_data(keys)).reshape(6, -1)
   for i in range(6):
     for j in range(i + 1, 6):
-      assert not jnp.array_equal(flat[i], flat[j])
+      assert not np.array_equal(keys_np[i], keys_np[j])

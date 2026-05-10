@@ -1166,6 +1166,7 @@ def dynamic_scan(
     chex.assert_axis_dimension(x, axis=1, expected=T)
 
   if not params.is_locked:
+    # pyrefly: ignore [bad-return]
     return static_scan(
         step_fn, params, inputs, prev_state, is_reset, is_training
     )
@@ -1381,10 +1382,12 @@ class RecurrenceBase(SequenceBase[InputsT, StateT, OutputsT, ResetT]):
     # Cast self to help type inference with generic parameters.
     step_fn = cast(StepFn[InputsT, StateT, OutputsT, ResetT], self)
     if self.is_static:
+      # pyrefly: ignore [bad-return]
       return static_scan(
           step_fn, params, inputs, prev_state, is_reset, is_training
       )
     else:
+      # pyrefly: ignore [bad-return]
       return dynamic_scan(
           step_fn, params, inputs, prev_state, is_reset, is_training
       )
