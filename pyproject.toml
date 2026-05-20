@@ -47,6 +47,7 @@ docs = [
     "furo",
     "nbsphinx",
     "ipykernel",
+    "sphinx-copybutton",
 ]
 
 [tool.hatch.build.targets.wheel]

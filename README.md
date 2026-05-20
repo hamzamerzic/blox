@@ -8,8 +8,12 @@
   </p>
 
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="blox is released under the MIT license"></a>
+  <a href="https://pypi.org/project/jax-blox/"><img src="https://img.shields.io/pypi/v/jax-blox.svg" alt="PyPI"></a>
+  <a href="https://blox.readthedocs.io/en/latest/"><img src="https://img.shields.io/readthedocs/blox" alt="Documentation Status"></a>
   <img src="https://img.shields.io/badge/python-3.11+-blue" alt="Python 3.11+">
-  <img src="https://img.shields.io/badge/jax-0.8+-green" alt="JAX 0.8+">
+  <img src="https://img.shields.io/badge/jax-0.10+-green" alt="JAX 0.10+">
+
+  <p><strong>📚 Documentation:</strong> <a href="https://blox.readthedocs.io/en/latest/">blox.readthedocs.io</a></p>
 </div>
 
 ---
