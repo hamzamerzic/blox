@@ -310,12 +310,12 @@ class LSTM(bx.RecurrenceBase[jax.Array, LSTMState, jax.Array, jax.Array]):
   The mathematical definition of the cell is as follows:
 
   .. math::
-      i = \\sigma(W_{ii} x + W_{hi} h + b_{hi}) \\\\
-      f = \\sigma(W_{if} x + W_{hf} h + b_{hf}) \\\\
-      g = \\tanh(W_{ig} x + W_{hg} h + b_{hg}) \\\\
-      o = \\sigma(W_{io} x + W_{ho} h + b_{ho}) \\\\
-      c' = f * c + i * g \\\\
-      h' = o * \\tanh(c')
+      i = \sigma(W_{ii} x + W_{hi} h + b_{hi}) \\
+      f = \sigma(W_{if} x + W_{hf} h + b_{hf}) \\
+      g = \tanh(W_{ig} x + W_{hg} h + b_{hg}) \\
+      o = \sigma(W_{io} x + W_{ho} h + b_{ho}) \\
+      c' = f * c + i * g \\
+      h' = o * \tanh(c')
 
   where x is the input, h is the output of the previous time step, and c is
   the memory.
@@ -324,7 +324,8 @@ class LSTM(bx.RecurrenceBase[jax.Array, LSTMState, jax.Array, jax.Array]):
   automatically providing support for both single-step execution (`__call__`)
   and efficient sequence processing (`apply` with scanning).
 
-  Example:
+  Example::
+
     lstm = LSTM(graph.child('lstm'), hidden_size=128, rng=rng)
 
     # Initialize state first:
@@ -446,14 +447,15 @@ class GRU(bx.RecurrenceBase[jax.Array, GRUState, jax.Array, jax.Array]):
   The mathematical definition of the cell is as follows:
 
   .. math::
-      r = \\sigma(W_{ir} x + W_{hr} h + b_{hr}) \\\\
-      z = \\sigma(W_{iz} x + W_{hz} h + b_{hz}) \\\\
-      n = \\tanh(W_{in} x + b_{in} + r * (W_{hn} h + b_{hn})) \\\\
+      r = \sigma(W_{ir} x + W_{hr} h + b_{hr}) \\
+      z = \sigma(W_{iz} x + W_{hz} h + b_{hz}) \\
+      n = \tanh(W_{in} x + b_{in} + r * (W_{hn} h + b_{hn})) \\
       h' = (1 - z) * n + z * h
 
   where x is the input and h is the output of the previous time step.
 
-  Example:
+  Example::
+
     gru = GRU(graph.child('gru'), hidden_size=128, rng=rng)
     state, params = gru.initial_state(params, inputs)
     (outputs, state), params = gru(params, inputs, state)
@@ -553,7 +555,8 @@ class Dropout(bx.Module):
   the remaining elements by `1 / (1 - rate)` to maintain expected values.
   During inference, this layer is a no-op.
 
-  Example:
+  Example::
+
     dropout = Dropout(graph.child('dropout'), rate=0.5, rng=rng)
     y, params = dropout(params, x, is_training=True)
   """
@@ -797,7 +800,8 @@ class BatchNorm(bx.Module):
   The input is expected to have shape ``(batch, *spatial_dims, features)``.
   Normalization is applied over all axes except the last (features) axis.
 
-  Example:
+  Example::
+
     bn = BatchNorm(graph.child('bn'))
 
     # Training: uses batch statistics and updates running stats.

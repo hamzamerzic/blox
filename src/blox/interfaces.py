@@ -122,7 +122,8 @@ class Graph:
 
     This is semantically equivalent to calling `self.child(name)`.
 
-    Example:
+    Example::
+
         # These are identical:
         sub = graph / 'layer1'
         sub = graph.child('layer1')
@@ -187,7 +188,8 @@ class Graph:
     Yields:
       Tuples of (path, module) for each descendant with a bound module.
 
-    Example:
+    Example::
+
       for path, module in graph.walk():
         if isinstance(module, bx.Linear):
           print(f'Found Linear at {path}')
@@ -304,7 +306,8 @@ class Params:
   * **Trainable split** — use ``split()`` to separate trainable from
     non-trainable.
 
-  Example:
+  Example::
+
     graph = bx.Graph('net')
     rng = bx.Rng(graph.child('rng'))
     model = MyModel(graph.child('model'), rng=rng)
@@ -354,7 +357,8 @@ class Params:
     Use this when you need to add parameters after initial locking,
     such as adding LoRA adapters to a pretrained model.
 
-    Example:
+    Example::
+
       # Load pretrained model.
       params = load_pretrained()
       params = params.locked()
@@ -464,7 +468,8 @@ class Params:
       RuntimeError: If params are locked.
       TypeError: If param is not a Param instance.
 
-    Example:
+    Example::
+
       # Load pretrained weights directly.
       params = bx.Params()
       params[('net', 'linear', 'kernel')] = bx.Param(weights, trainable=True)

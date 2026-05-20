@@ -1,17 +1,17 @@
 :hide-toc:
 
-.. image:: _static/logo.png
-   :alt: blox logo
-   :width: 240px
-   :align: center
+.. rst-class:: landing-title
+
+blox
+====
+
+.. rst-class:: landing-tagline
+
+A functional and lightweight neural network library for JAX.
 
 .. raw:: html
 
-   <h1 style="text-align: center; margin-top: 0.5em;">blox</h1>
-   <p style="text-align: center; font-size: 1.15em; margin-top: -0.4em;">
-     A functional and lightweight neural network library for JAX.
-   </p>
-   <p style="text-align: center;">
+   <p class="landing-badges">
      <a href="https://github.com/hamzamerzic/blox/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
      <a href="https://pypi.org/project/jax-blox/"><img src="https://img.shields.io/pypi/v/jax-blox.svg" alt="PyPI"></a>
      <img src="https://img.shields.io/badge/python-3.11+-blue" alt="Python 3.11+">
@@ -50,14 +50,28 @@ Who is blox for?
   building custom training loops, implementing novel architectures, or
   scaling up, you have direct access to the full execution stack.
 
-Quickstart
-----------
+Installation
+------------
 
-Install from PyPI:
+Since blox uses JAX, check the
+`JAX installation guide <https://docs.jax.dev/en/latest/installation.html>`_
+for your specific hardware (CPU / GPU / TPU). You will need Python 3.11 or
+later.
+
+Install the latest release from PyPI:
 
 .. code-block:: bash
 
    pip install jax-blox
+
+Or install the development version from source:
+
+.. code-block:: bash
+
+   pip install git+https://github.com/hamzamerzic/blox.git
+
+Quickstart
+----------
 
 Define a layer:
 
@@ -119,21 +133,22 @@ the pieces fit together.
 
 .. toctree::
    :hidden:
+   :maxdepth: 1
    :caption: Getting Started
 
-   installation
-   readme_examples
    mnist_tutorial
    rnn_tutorial
 
 .. toctree::
    :hidden:
+   :maxdepth: 1
    :caption: Key Concepts
 
    design
 
 .. toctree::
    :hidden:
+   :maxdepth: 1
    :caption: Advanced Topics
 
    checkpointable_training
@@ -142,13 +157,7 @@ the pieces fit together.
 
 .. toctree::
    :hidden:
+   :maxdepth: 1
    :caption: Reference
 
    api
-
-Indices
--------
-
-* :ref:`genindex`
-* :ref:`modindex`
-* :ref:`search`

@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="https://i.ibb.co/FLmR2T3r/logo.png" width="400" alt="blox logo">
+  <img src="images/logo.png" width="400" alt="blox logo">
 
   <h1>blox</h1>
 

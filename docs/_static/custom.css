@@ -1,0 +1,107 @@
+/* Constrain the sidebar logo. 175px is ~25% larger than the previous 140px
+   while still fitting comfortably in Furo's default sidebar width. */
+.sidebar-logo-container {
+  max-width: 175px;
+  margin: 0 auto 0.5rem;
+}
+
+.sidebar-logo {
+  width: 100%;
+  height: auto;
+}
+
+/* Slightly tighter article max-width for a calmer reading column. */
+.bd-article-container,
+.article-container {
+  max-width: 60rem;
+}
+
+/* Center images in the article body that use the `:align: center` directive
+   (RST writes them as <img class="align-center">). */
+img.align-center {
+  display: block;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+/* Landing page: center only the title/tagline/badges, not the whole section.
+   We can't put `text-align: center` on the wrapping `.landing-title` section
+   because it would cascade into the H2 sub-sections inside the same H1
+   section. Style just the title/tagline/badges elements directly. */
+.landing-title {
+  margin-top: 1.5rem;
+}
+
+.landing-title > h1 {
+  text-align: center;
+  font-size: 3rem;
+  margin-bottom: 0.25rem;
+  /* Furo floats `.content-icon-container` to the right above the article,
+     which would shift the centered H1 text leftward. Clear the float so
+     the H1 takes the full width and centers truly. */
+  clear: right;
+}
+
+.landing-title > h1 .headerlink {
+  display: none;  /* The big centered title doesn't need a `¶` anchor. */
+}
+
+p.landing-tagline {
+  text-align: center;
+  font-size: 1.15rem;
+  color: var(--color-foreground-secondary);
+  margin-top: 0;
+  margin-bottom: 0.75rem;
+}
+
+p.landing-badges {
+  text-align: center;
+  margin-bottom: 2rem;
+}
+
+p.landing-badges img {
+  margin: 0 0.15rem;
+  vertical-align: middle;
+}
+
+/* Colab/GitHub badge strip injected at the top of every notebook page. */
+p.colab-badges {
+  margin-bottom: 1.5rem;
+}
+
+p.colab-badges img {
+  margin-right: 0.5rem;
+  vertical-align: middle;
+}
+
+/* Hide the page-bottom footer (copyright + "Made with Sphinx and Furo"
+   + duplicate GitHub icon). The user prefers a clean ending; the prev/next
+   page navigation in `.related-pages` is kept. We add some breathing room
+   below it so the last visible element isn't flush against the viewport. */
+.bottom-of-page {
+  display: none;
+}
+
+article[role="main"] {
+  padding-bottom: 4rem;
+}
+
+.related-pages {
+  margin-bottom: 2rem;
+}
+
+/* Hide RTD's runtime-injected "latest/stable" version flyout — it can
+   overlap content in the bottom-right corner and isn't useful while
+   blox has only the `latest` version published. */
+readthedocs-flyout {
+  display: none;
+}
+
+/* Pull in Inter (body) and JetBrains Mono (code). Loaded at the top of the
+   doc stylesheet so subsequent Furo rules pick them up via `--font-stack`. */
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap");
+
+/* Theme toggle sits in Furo's default spot — float-right at the top of the
+   article, naturally next to the H1. We compensate for that float on the
+   centered landing H1 below so it stays truly centered. */
+

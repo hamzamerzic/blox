@@ -1,18 +1,19 @@
 """Interactive visualization for blox models using Treescope.
 
-This module renders model structure and parameters as an interactive tree.
-The main entry point is `display(graph, params)`.
+This module renders model structure and parameters as an interactive
+tree. The main entry point is :func:`display`.
 
-Example:
-  graph = bx.Graph('net')
-  rng = bx.Rng(graph.child('rng'))
-  linear = bx.Linear(graph.child('linear'), output_size=32, rng=rng)
-  params = rng.seed(bx.Params(), seed=42)
-  _, params = linear(params, x)
-  bx.display(graph, params)
+Example::
 
-  # Or without params (structure only):
-  bx.display(graph)
+    graph = bx.Graph('net')
+    rng = bx.Rng(graph.child('rng'))
+    linear = bx.Linear(graph.child('linear'), output_size=32, rng=rng)
+    params = rng.seed(bx.Params(), seed=42)
+    _, params = linear(params, x)
+    bx.display(graph, params)
+
+    # Or without params (structure only):
+    bx.display(graph)
 """
 
 from __future__ import annotations
@@ -375,15 +376,16 @@ def display(
     params: Optional Params container. If None, shows only the module
       hierarchy and constructor arguments (structure-only mode).
 
-  Example:
-    # Full display with params:
-    bx.display(graph, params)
+  Example::
 
-    # Structure only (no params):
-    bx.display(graph)
+      # Full display with params:
+      bx.display(graph, params)
 
-    # Multiple graphs in one view:
-    bx.display((encoder_graph, decoder_graph), params)
+      # Structure only (no params):
+      bx.display(graph)
+
+      # Multiple graphs in one view:
+      bx.display((encoder_graph, decoder_graph), params)
   """
   # Normalize single graph to tuple.
   graphs = (graph,) if isinstance(graph, bx.Graph) else graph
