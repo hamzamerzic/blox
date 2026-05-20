@@ -42,6 +42,12 @@ dev = [
     "pyink",       # For formatting
     "tensorflow",  # For resumable dataset tests
 ]
+docs = [
+    "sphinx>=7,<9",
+    "furo",
+    "nbsphinx",
+    "ipykernel",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/blox"]
