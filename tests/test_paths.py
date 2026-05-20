@@ -1,8 +1,9 @@
 """Tests for path handling with special characters in names."""
 
-import blox as bx
 import jax
 import jax.numpy as jnp
+
+import blox as bx
 
 
 def test_slash_in_module_name():

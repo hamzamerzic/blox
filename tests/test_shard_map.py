@@ -5,13 +5,14 @@ This is expected JAX behavior - users must manually fold in axis indices
 to get unique randomness per device.
 """
 
-import blox as bx
 import chex
 import jax
 import jax.numpy as jnp
 import numpy as np
 from jax.sharding import NamedSharding
 from jax.sharding import PartitionSpec as P
+
+import blox as bx
 
 # Set up fake CPU devices for testing.
 chex.set_n_cpu_devices(8)

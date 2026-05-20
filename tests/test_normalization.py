@@ -1,5 +1,6 @@
-import blox as bx
 import jax.numpy as jnp
+
+import blox as bx
 
 
 def test_layernorm_shapes():

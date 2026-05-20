@@ -1,6 +1,7 @@
-import blox as bx
 import jax
 import jax.numpy as jnp
+
+import blox as bx
 
 
 def test_embed_shapes():

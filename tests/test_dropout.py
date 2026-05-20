@@ -1,6 +1,7 @@
-import blox as bx
 import jax.numpy as jnp
 import pytest
+
+import blox as bx
 
 
 def test_dropout_training_mode():

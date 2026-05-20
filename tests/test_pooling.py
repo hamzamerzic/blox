@@ -1,5 +1,6 @@
-import blox.blocks as blocks
 import jax.numpy as jnp
+
+import blox.blocks as blocks
 
 
 def test_max_pool_shapes():

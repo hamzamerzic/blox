@@ -1,7 +1,8 @@
-import blox as bx
 import chex
 import jax
 import jax.numpy as jnp
+
+import blox as bx
 
 
 def test_rng_updates_during_training():

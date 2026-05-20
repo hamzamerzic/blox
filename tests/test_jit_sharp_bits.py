@@ -12,9 +12,10 @@ Key patterns:
 3. Pass mutable state as Params, not module attributes
 """
 
-import blox as bx
 import jax
 import jax.numpy as jnp
+
+import blox as bx
 
 
 def test_module_modification_before_jit_works():

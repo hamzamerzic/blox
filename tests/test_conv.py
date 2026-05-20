@@ -1,7 +1,8 @@
-import blox as bx
 import jax
 import jax.numpy as jnp
 import pytest
+
+import blox as bx
 
 
 def test_conv1d_shapes():

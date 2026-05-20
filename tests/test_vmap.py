@@ -5,9 +5,10 @@ This is expected JAX behavior - users must manually fold in axis indices
 to get unique randomness per batch element.
 """
 
-import blox as bx
 import jax
 import jax.numpy as jnp
+
+import blox as bx
 
 # =============================================================================
 # Basic vmap compatibility
