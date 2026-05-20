@@ -1,18 +1,21 @@
 """Standard neural network building blocks.
 
-This module provides a collection of pre-built, functional layers ready for use.
+This module provides a collection of pre-built, functional layers ready
+for use.
 
-Included Layers:
-- **Core:** `Embed`, `Linear`
-- **Convolution:** `Conv`, `ConvTranspose`
-- **Recurrent:** `LSTM`, `GRU`
-- **Normalization:** `LayerNorm`, `RMSNorm`, `BatchNorm`
-- **Regularization:** `Dropout`
-- **Containers:** `Sequential`
-- **Pooling:** `max_pool`, `min_pool`, `avg_pool`
+Included layers:
 
-Blocks are usually subclasses of `bx.Module` which strictly follows the
-`(params, inputs) -> (outputs, params)` functional signature.
+* **Core** — ``Embed``, ``Linear``.
+* **Convolution** — ``Conv``, ``ConvTranspose``.
+* **Recurrent** — ``LSTM``, ``GRU``.
+* **Normalization** — ``LayerNorm``, ``RMSNorm``, ``BatchNorm``.
+* **Regularization** — ``Dropout``.
+* **Containers** — ``Sequential``.
+* **Pooling** — ``max_pool``, ``min_pool``, ``avg_pool``.
+
+Blocks are usually subclasses of :class:`blox.Module` which strictly
+follows the ``(params, inputs) -> (outputs, params)`` functional
+signature.
 """
 
 import math
@@ -30,19 +33,24 @@ PaddingLike = str | Sequence[tuple[int, int]]
 class Embed(bx.Module):
   """Embedding layer that maps integer indices to dense vectors.
 
-  Supports weight tying for language models via the `attend` method, which
-  applies the transpose of the embedding matrix (useful for output projections).
+  Supports weight tying for language models via the ``attend`` method,
+  which applies the transpose of the embedding matrix (useful for output
+  projections).
 
-  Example:
-    embed = Embed(
-      graph.child('embed'), num_embeddings=10000, embedding_size=512, rng=rng
-    )
+  Example::
 
-    # Forward pass: indices -> embeddings
-    embeddings, params = embed(params, token_ids)
+      embed = Embed(
+          graph.child('embed'),
+          num_embeddings=10000,
+          embedding_size=512,
+          rng=rng,
+      )
 
-    # Weight-tied output projection: hidden -> logits
-    logits, params = embed.attend(params, hidden_states)
+      # Forward pass: indices -> embeddings.
+      embeddings, params = embed(params, token_ids)
+
+      # Weight-tied output projection: hidden -> logits.
+      logits, params = embed.attend(params, hidden_states)
   """
 
   def __init__(
@@ -130,16 +138,17 @@ class Embed(bx.Module):
 class Linear(bx.Module):
   """A standard linear transformation layer.
 
-  Computes `output = input @ kernel + bias`.
+  Computes ``output = input @ kernel + bias``.
 
-  Supports model parallelism via metadata. Example for sharding weights:
-    linear = Linear(
-      graph.child('linear'),
-      output_size=1024,
-      rng=rng,
-      kernel_metadata={'sharding': (None, 'model')},  # Shard output dim
-      bias_metadata={'sharding': ('model',)},
-    )
+  Supports model parallelism via metadata. Example for sharding weights::
+
+      linear = Linear(
+          graph.child('linear'),
+          output_size=1024,
+          rng=rng,
+          kernel_metadata={'sharding': (None, 'model')},  # Shard output.
+          bias_metadata={'sharding': ('model',)},
+      )
   """
 
   def __init__(
@@ -229,19 +238,21 @@ class Linear(bx.Module):
 class Sequential(bx.Module):
   """A sequential container.
 
-  Modules will be added to it in the order they are passed in the constructor.
-  Alternatively, an ordered dict of modules can also be passed in.
+  Modules will be added to it in the order they are passed in the
+  constructor. Alternatively, an ordered dict of modules can also be
+  passed in.
 
-  Example:
-    mlp = Sequential(
-      graph.child('mlp'),
-      [
-        bx.Linear(graph.child('l1'), 32),
-        jax.nn.relu,
-        bx.Linear(graph.child('l2'), 10),
-      ],
-    )
-    y, params = mlp(params, x)
+  Example::
+
+      mlp = Sequential(
+          graph.child('mlp'),
+          [
+              bx.Linear(graph.child('l1'), 32),
+              jax.nn.relu,
+              bx.Linear(graph.child('l2'), 10),
+          ],
+      )
+      y, params = mlp(params, x)
   """
 
   def __init__(
@@ -783,7 +794,7 @@ class BatchNorm(bx.Module):
   updates the running averages. During inference, uses the stored running
   statistics.
 
-  The input is expected to have shape (batch, *spatial_dims, features).
+  The input is expected to have shape ``(batch, *spatial_dims, features)``.
   Normalization is applied over all axes except the last (features) axis.
 
   Example:
@@ -847,7 +858,7 @@ class BatchNorm(bx.Module):
 
     Args:
       params: The parameters container.
-      inputs: The input array with shape (batch, *spatial_dims, features).
+      inputs: The input array with shape ``(batch, *spatial_dims, features)``.
       is_training: If True, uses batch statistics and updates running stats.
         If False, uses stored running statistics (inference).
 
@@ -940,30 +951,40 @@ def _normalize_tuple(x: int | Sequence[int], n: int) -> tuple[int, ...]:
 class Conv(bx.Module):
   """General N-dimensional convolution layer.
 
-  The number of spatial dimensions is inferred from kernel_size:
-  - 1-tuple or int: 1D convolution (single spatial dimension)
-  - 2-tuple: 2D convolution (height, width)
-  - 3-tuple: 3D convolution (depth, height, width)
+  The number of spatial dimensions is inferred from ``kernel_size``:
+
+  * 1-tuple or int: 1D convolution (single spatial dimension).
+  * 2-tuple: 2D convolution (height, width).
+  * 3-tuple: 3D convolution (depth, height, width).
 
   Supports arbitrary batch dimensions (0 or more). Uses channels-last
-  convention: (*batch, *spatial_dims, channels).
+  convention: ``(*batch, *spatial_dims, channels)``.
 
-  Example:
-    # 2D convolution for images (NHWC format)
-    conv = Conv(
-        graph.child('conv'), kernel_size=(3, 3), output_channels=64, rng=rng
-    )
-    y, params = conv(params, x)  # x: [batch, height, width, channels]
+  Example::
 
-    # 1D convolution for sequences (NLC format)
-    conv = Conv(graph.child('conv'), kernel_size=3, output_channels=64, rng=rng)
-    y, params = conv(params, x)  # x: [batch, length, channels]
+      # 2D convolution for images (NHWC format).
+      conv = Conv(
+          graph.child('conv'),
+          kernel_size=(3, 3),
+          output_channels=64,
+          rng=rng,
+      )
+      y, params = conv(params, x)  # x: [batch, height, width, channels]
 
-    # Unbatched input.
-    conv = Conv(
-        graph.child('conv'), kernel_size=(3, 3), output_channels=64, rng=rng
-    )
-    y, params = conv(params, x)  # x: [height, width, channels]
+      # 1D convolution for sequences (NLC format).
+      conv = Conv(
+          graph.child('conv'), kernel_size=3, output_channels=64, rng=rng
+      )
+      y, params = conv(params, x)  # x: [batch, length, channels]
+
+      # Unbatched input.
+      conv = Conv(
+          graph.child('conv'),
+          kernel_size=(3, 3),
+          output_channels=64,
+          rng=rng,
+      )
+      y, params = conv(params, x)  # x: [height, width, channels]
   """
 
   def __init__(
@@ -1034,13 +1055,13 @@ class Conv(bx.Module):
 
     Args:
       params: The parameters container.
-      inputs: Input array with shape (*batch, *spatial_dims, input_channels).
+      inputs: Input array with shape ``(*batch, *spatial_dims, input_channels)``.
         Supports arbitrary batch dimensions (0 or more).
       precision: Optional precision for the convolution.
 
     Returns:
       A tuple (output, params), where output has shape
-      (*batch, *out_spatial, output_channels).
+      ``(*batch, *out_spatial, output_channels)``.
 
     Raises:
       ValueError: If input has fewer dimensions than needed for conv.
@@ -1141,20 +1162,25 @@ class ConvTranspose(bx.Module):
   """General N-dimensional transposed convolution layer.
 
   Also known as deconvolution or fractionally-strided convolution.
-  The number of spatial dimensions is inferred from kernel_size:
-  - 1-tuple or int: 1D convolution (single spatial dimension)
-  - 2-tuple: 2D convolution (height, width)
-  - 3-tuple: 3D convolution (depth, height, width)
+  The number of spatial dimensions is inferred from ``kernel_size``:
+
+  * 1-tuple or int: 1D convolution (single spatial dimension).
+  * 2-tuple: 2D convolution (height, width).
+  * 3-tuple: 3D convolution (depth, height, width).
 
   Supports arbitrary batch dimensions (0 or more). Uses channels-last
-  convention: (*batch, *spatial_dims, channels).
+  convention: ``(*batch, *spatial_dims, channels)``.
 
-  Example:
-    # 2D transposed convolution for images (NHWC format).
-    conv_t = ConvTranspose(
-        graph.child('conv_t'), kernel_size=(3, 3), output_channels=3, rng=rng
-    )
-    y, params = conv_t(params, x)  # x: [batch, height, width, channels]
+  Example::
+
+      # 2D transposed convolution for images (NHWC format).
+      conv_t = ConvTranspose(
+          graph.child('conv_t'),
+          kernel_size=(3, 3),
+          output_channels=3,
+          rng=rng,
+      )
+      y, params = conv_t(params, x)  # x: [batch, height, width, channels]
   """
 
   def __init__(
@@ -1222,13 +1248,13 @@ class ConvTranspose(bx.Module):
 
     Args:
       params: The parameters container.
-      inputs: Input array with shape (*batch, *spatial_dims, input_channels).
+      inputs: Input array with shape ``(*batch, *spatial_dims, input_channels)``.
         Supports arbitrary batch dimensions (0 or more).
       precision: Optional precision for the convolution.
 
     Returns:
       A tuple (output, params), where output has shape
-      (*batch, *out_spatial, output_channels).
+      ``(*batch, *out_spatial, output_channels)``.
 
     Raises:
       ValueError: If input has fewer dimensions than needed for conv.
@@ -1336,16 +1362,17 @@ def max_pool(
 ) -> jax.Array:
   """Applies max pooling over spatial dimensions.
 
-  The number of spatial dimensions is inferred from window_shape:
-  - 1-tuple or int: 1D pooling (single spatial dimension)
-  - 2-tuple: 2D pooling (height, width)
-  - 3-tuple: 3D pooling (depth, height, width)
+  The number of spatial dimensions is inferred from ``window_shape``:
+
+  * 1-tuple or int: 1D pooling (single spatial dimension).
+  * 2-tuple: 2D pooling (height, width).
+  * 3-tuple: 3D pooling (depth, height, width).
 
   Supports arbitrary batch dimensions (0 or more). Uses channels-last
-  convention: (*batch, *spatial_dims, channels).
+  convention: ``(*batch, *spatial_dims, channels)``.
 
   Args:
-    inputs: Input array with shape (*batch, *spatial_dims, channels).
+    inputs: Input array with shape ``(*batch, *spatial_dims, channels)``.
     window_shape: Shape of the pooling window as a tuple, determining the
       number of spatial dimensions. For 1D pooling, an int can be used.
     strides: Stride of the pooling. If None, uses window_shape (no overlap).
@@ -1355,9 +1382,10 @@ def max_pool(
   Returns:
     Pooled output array.
 
-  Example:
-    # 2x2 max pooling with stride 2
-    y = max_pool(x, window_shape=(2, 2), strides=2)
+  Example::
+
+      # 2x2 max pooling with stride 2.
+      y = max_pool(x, window_shape=(2, 2), strides=2)
   """
   window = (
       (window_shape,) if isinstance(window_shape, int) else tuple(window_shape)
@@ -1415,16 +1443,17 @@ def min_pool(
 ) -> jax.Array:
   """Applies min pooling over spatial dimensions.
 
-  The number of spatial dimensions is inferred from window_shape:
-  - 1-tuple or int: 1D pooling (single spatial dimension)
-  - 2-tuple: 2D pooling (height, width)
-  - 3-tuple: 3D pooling (depth, height, width)
+  The number of spatial dimensions is inferred from ``window_shape``:
+
+  * 1-tuple or int: 1D pooling (single spatial dimension).
+  * 2-tuple: 2D pooling (height, width).
+  * 3-tuple: 3D pooling (depth, height, width).
 
   Supports arbitrary batch dimensions (0 or more). Uses channels-last
-  convention: (*batch, *spatial_dims, channels).
+  convention: ``(*batch, *spatial_dims, channels)``.
 
   Args:
-    inputs: Input array with shape (*batch, *spatial_dims, channels).
+    inputs: Input array with shape ``(*batch, *spatial_dims, channels)``.
     window_shape: Shape of the pooling window as a tuple, determining the
       number of spatial dimensions. For 1D pooling, an int can be used.
     strides: Stride of the pooling. If None, uses window_shape (no overlap).
@@ -1486,19 +1515,22 @@ def avg_pool(
 ) -> jax.Array:
   """Applies average pooling over spatial dimensions.
 
-  The number of spatial dimensions is inferred from window_shape:
-  - 1-tuple or int: 1D pooling (single spatial dimension)
-  - 2-tuple: 2D pooling (height, width)
-  - 3-tuple: 3D pooling (depth, height, width)
+  The number of spatial dimensions is inferred from ``window_shape``:
+
+  * 1-tuple or int: 1D pooling (single spatial dimension).
+  * 2-tuple: 2D pooling (height, width).
+  * 3-tuple: 3D pooling (depth, height, width).
 
   Supports arbitrary batch dimensions (0 or more). Uses channels-last
-  convention: (*batch, *spatial_dims, channels).
+  convention: ``(*batch, *spatial_dims, channels)``.
 
-  Note: When padding='SAME', the average is computed over the valid (non-padded)
-  pixels in the window, ignoring the zeros added by padding.
+  Note:
+    When ``padding='SAME'`` the average is computed over the valid
+    (non-padded) pixels in the window, ignoring the zeros added by
+    padding.
 
   Args:
-    inputs: Input array with shape (*batch, *spatial_dims, channels).
+    inputs: Input array with shape ``(*batch, *spatial_dims, channels)``.
     window_shape: Shape of the pooling window as a tuple, determining the
       number of spatial dimensions. For 1D pooling, an int can be used.
     strides: Stride of the pooling. If None, uses window_shape (no overlap).
@@ -1508,9 +1540,10 @@ def avg_pool(
   Returns:
     Pooled output array.
 
-  Example:
-    # 2x2 average pooling with stride 2
-    y = avg_pool(x, window_shape=(2, 2), strides=2)
+  Example::
+
+      # 2x2 average pooling with stride 2.
+      y = avg_pool(x, window_shape=(2, 2), strides=2)
   """
   window = (
       (window_shape,) if isinstance(window_shape, int) else tuple(window_shape)

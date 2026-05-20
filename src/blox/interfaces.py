@@ -2,17 +2,18 @@
 
 This module defines the fundamental building blocks:
 
-1.  **Graph:** Represents the static, hierarchical structure of the model. It
-    handles naming and pathing (e.g. `net/layer1/weights`) but stores no state.
-2.  **Params:** A functional, immutable container for all model state (weights,
-    RNG keys, batch norms stats). It is passed through every layer.
-3.  **Module:** The base class for layers. It connects a `Graph` node to
-    parameter creation logic (`get_param` / `set_param`).
-4.  **Sequence Processing:**
-    *   `SequenceBase`: Abstract interface for layers that handle sequences
-        (RNN, Transformer).
-    *   `RecurrenceBase`: Abstract interface for layers that process sequences
-        step-by-step (RNN, LSTM, GRU).
+* **Graph** — represents the static, hierarchical structure of the model.
+  It handles naming and pathing (e.g. ``net/layer1/weights``) but stores
+  no state.
+* **Params** — a functional, immutable container for all model state
+  (weights, RNG keys, batch norm stats). It is passed through every
+  layer.
+* **Module** — the base class for layers. It connects a ``Graph`` node to
+  parameter creation logic (``get_param`` / ``set_param``).
+* **SequenceBase** — abstract interface for layers that handle sequences
+  (RNN, Transformer).
+* **RecurrenceBase** — abstract interface for layers that process
+  sequences step-by-step (RNN, LSTM, GRU).
 
 These interfaces enforce functional purity and explicit state management,
 making the library robust for JAX transformations.
@@ -52,23 +53,26 @@ ResetT = TypeVar('ResetT', bound=chex.ArrayTree)
 class Graph:
   """The structural graph of a model.
 
-  A Graph represents the hierarchical structure of your model. Each node in the
-  graph corresponds to a module (layer), and edges represent the parent-child
-  relationships between them. When you create a child node with `graph.child()`,
-  you're extending this structure.
+  A Graph represents the hierarchical structure of your model. Each node
+  in the graph corresponds to a module (layer), and edges represent the
+  parent-child relationships between them. When you create a child node
+  with ``graph.child()``, you're extending this structure.
 
   The graph serves two purposes:
-  1. It defines how your model is organized - which modules contain which.
-  2. It provides unique namespaces for parameters. Each node's path (e.g.,
-     ('net', 'encoder', 'dense')) becomes the prefix for that module's params.
 
-  Dependency injection creates additional relationships in the graph. When a
-  module is created externally and passed into another, it retains its original
-  position in the graph (as a sibling rather than a child), enabling flexible
-  parameter sharing patterns.
+  * It defines how your model is organized — which modules contain
+    which.
+  * It provides unique namespaces for parameters. Each node's path
+    (e.g. ``('net', 'encoder', 'dense')``) becomes the prefix for that
+    module's params.
 
-  The graph does not store parameters - that's the job of the Params container.
-  Graph defines structure; Params holds state.
+  Dependency injection creates additional relationships in the graph.
+  When a module is created externally and passed into another, it
+  retains its original position in the graph (as a sibling rather than
+  a child), enabling flexible parameter sharing patterns.
+
+  The graph does not store parameters — that's the job of the Params
+  container. Graph defines structure; Params holds state.
   """
 
   def __init__(self, name: str) -> None:
@@ -207,9 +211,10 @@ class Param:
   Attributes:
     value: The actual JAX array or PyTree stored.
     trainable: Boolean flag indicating if gradients should be computed.
-    metadata: Dictionary for arbitrary tags. Common keys include:
-      - 'sharding': tuple of axis names (e.g., (None, 'model')) for partitioning
-      - 'tag': string identifier (e.g., 'rng', 'optimizer_state')
+    metadata: Dictionary for arbitrary tags. Common keys include
+      ``'sharding'`` (a tuple of axis names like ``(None, 'model')`` for
+      partitioning) and ``'tag'`` (a string identifier like ``'rng'`` or
+      ``'optimizer_state'``).
   """
 
   def __init__(
@@ -286,14 +291,18 @@ jax.tree_util.register_pytree_node(
 class Params:
   """Immutable container for model parameters and state.
 
-  Params is a pure state store holding all model state: trainable weights,
-  non-trainable values (like batch norm statistics), and RNG state. It enforces
-  functional purity by returning new instances on every modification.
+  Params is a pure state store holding all model state: trainable
+  weights, non-trainable values (like batch norm statistics), and RNG
+  state. It enforces functional purity by returning new instances on
+  every modification.
 
   Key features:
-  - **Functional updates**: All methods return new Params instances.
-  - **Tuple paths**: Parameters are keyed by tuples like ('net', 'linear', 'w').
-  - **Trainable split**: Use `split()` to separate trainable from non-trainable.
+
+  * **Functional updates** — all methods return new Params instances.
+  * **Tuple paths** — parameters are keyed by tuples like
+    ``('net', 'linear', 'w')``.
+  * **Trainable split** — use ``split()`` to separate trainable from
+    non-trainable.
 
   Example:
     graph = bx.Graph('net')
@@ -638,37 +647,44 @@ jax.tree_util.register_pytree_node(
 class Module:
   """Base class for neural network layers.
 
-  Module provides the foundation for building neural network layers in blox.
-  It connects layers to the Graph hierarchy for parameter namespacing and
-  provides helper methods for parameter creation.
+  Module provides the foundation for building neural network layers in
+  blox. It connects layers to the Graph hierarchy for parameter
+  namespacing and provides helper methods for parameter creation.
 
   Key features:
-  - **Graph binding**: Each module owns a Graph node that namespaces its params.
-  - **Constructor capture**: Arguments are automatically saved to graph metadata
-    for visualization and serialization.
-  - **Parameter helpers**: `get_param` and `set_param` simplify parameter
-    handling.
+
+  * **Graph binding** — each module owns a Graph node that namespaces
+    its params.
+  * **Constructor capture** — arguments are automatically saved to
+    graph metadata for visualization and serialization.
+  * **Parameter helpers** — ``get_param`` and ``set_param`` simplify
+    parameter handling.
 
   All subclasses must:
-  1. Accept `graph` as the first constructor argument
-  2. Call `super().__init__(graph)` in their `__init__`
-  3. Implement `__call__(self, params, ...) -> (output, params)`
 
-  Example:
-    class Linear(bx.Module):
-      def __init__(self, graph, output_size):
-        super().__init__(graph)
-        self.output_size = output_size
+  * Accept ``graph`` as the first constructor argument.
+  * Call ``super().__init__(graph)`` in their ``__init__``.
+  * Implement ``__call__(self, params, ...) -> (output, params)``.
 
-      def __call__(self, params, x):
-        kernel, params = self.get_param(
-            params, 'kernel', (x.shape[-1], self.output_size),
-            jax.nn.initializers.lecun_normal()
-        )
-        return x @ kernel, params
+  Example::
 
-    graph = bx.Graph('net')
-    linear = Linear(graph.child('linear'), output_size=32)
+      class Linear(bx.Module):
+
+        def __init__(self, graph, output_size):
+          super().__init__(graph)
+          self.output_size = output_size
+
+        def __call__(self, params, x):
+          kernel, params = self.get_param(
+              params,
+              'kernel',
+              (x.shape[-1], self.output_size),
+              jax.nn.initializers.lecun_normal(),
+          )
+          return x @ kernel, params
+
+      graph = bx.Graph('net')
+      linear = Linear(graph.child('linear'), output_size=32)
   """
 
   # Instance attributes for constructor info (set by __init_subclass__ wrapper).
@@ -759,39 +775,41 @@ class Module:
     On first call, creates a new parameter using the initializer.
     On subsequent calls, returns the existing parameter value.
 
-    For existing parameters, shape and init can be omitted:
-      kernel, params = self.get_param(params, 'kernel')
+    For existing parameters, ``shape`` and ``init`` can be omitted::
+
+        kernel, params = self.get_param(params, 'kernel')
 
     Args:
       params: The parameter container.
-      name: Local parameter name (e.g., 'kernel', 'bias').
+      name: Local parameter name (e.g., ``'kernel'``, ``'bias'``).
       shape: Shape of the parameter tensor. Required for new params.
       init: JAX initializer function. Required for new params.
-      dtype: Data type (default: float32).
+      dtype: Data type (default: ``float32``).
       trainable: Whether gradients should be computed (default: True).
-      metadata: Optional metadata dict. Common keys:
-        - 'sharding': tuple of mesh axis names for model parallelism.
+      metadata: Optional metadata dict. Common keys include
+        ``'sharding'``: a tuple of mesh axis names for model parallelism.
       rng: Optional Rng module for stochastic initialization.
 
     Returns:
-      Tuple of (parameter_value, updated_params).
+      Tuple of ``(parameter_value, updated_params)``.
 
     Raises:
       KeyError: If param doesn't exist and shape/init not provided.
 
-    Example:
-      # Creating a new parameter:
-      kernel, params = self.get_param(
-          params,
-          'kernel',
-          shape=(in_size, out_size),
-          init=jax.nn.initializers.lecun_normal(),
-          rng=self.rng,
-          metadata={'sharding': (None, 'model')}
-      )
+    Example::
 
-      # Getting an existing parameter:
-      kernel, params = self.get_param(params, 'kernel')
+        # Creating a new parameter:
+        kernel, params = self.get_param(
+            params,
+            'kernel',
+            shape=(in_size, out_size),
+            init=jax.nn.initializers.lecun_normal(),
+            rng=self.rng,
+            metadata={'sharding': (None, 'model')},
+        )
+
+        # Getting an existing parameter:
+        kernel, params = self.get_param(params, 'kernel')
     """
     return params._get(
         self.param_path(name), shape, init, dtype, trainable, metadata, rng
@@ -820,15 +838,18 @@ class Module:
     Raises:
       ValueError: If value is None and neither trainable nor metadata provided.
 
-    Example:
-      # Update just the value.
-      params = module.set_param(params, 'kernel', new_kernel)
+    Example::
 
-      # Freeze a parameter.
-      params = module.set_param(params, 'kernel', None, trainable=False)
+        # Update just the value.
+        params = module.set_param(params, 'kernel', new_kernel)
 
-      # Add metadata.
-      params = module.set_param(params, 'kernel', None, metadata={'tag': 'lora'})
+        # Freeze a parameter.
+        params = module.set_param(params, 'kernel', None, trainable=False)
+
+        # Add metadata.
+        params = module.set_param(
+            params, 'kernel', None, metadata={'tag': 'lora'}
+        )
     """
     return params._set(self.param_path(name), value, trainable, metadata)
 
@@ -839,12 +860,13 @@ class Module:
       name: Local parameter name.
 
     Returns:
-      Full tuple path like ('net', 'linear', 'kernel').
+      Full tuple path like ``('net', 'linear', 'kernel')``.
 
-    Example:
-      # Check if a param exists.
-      if module.param_path('kernel') in params:
-        kernel, params = module.get_param(...)
+    Example::
+
+        # Check if a param exists.
+        if module.param_path('kernel') in params:
+          kernel, params = module.get_param(...)
     """
     return self.graph.path + (name,)
 
@@ -877,37 +899,39 @@ class Module:
 class Rng(Module):
   """A random number generator stream stored as non-trainable params.
 
-  Produces deterministic, counter-based random keys. The seed is stored in
-  Params, not the Rng, which allows the same Rng module to be used with
-  different seeds without changing the model structure.
+  Produces deterministic, counter-based random keys. The seed is stored
+  in Params, not the Rng, which allows the same Rng module to be used
+  with different seeds without changing the model structure.
 
   Seeds defined as int are converted and stored as a JAX key array.
 
-  Example:
-    graph = bx.Graph('net')
-    rng = bx.Rng(graph.child('rng'))
-    model = MyModel(graph.child('model'), rng=rng)
+  Example::
 
-    # Create params and seed the Rng.
-    params = rng.seed(bx.Params(), seed=42)
+      graph = bx.Graph('net')
+      rng = bx.Rng(graph.child('rng'))
+      model = MyModel(graph.child('model'), rng=rng)
 
-    # Forward pass creates parameters.
-    _, params = model(params, x)
-    params = params.locked()
+      # Create params and seed the Rng.
+      params = rng.seed(bx.Params(), seed=42)
 
-  Modules that need randomness should accept an Rng on construction:
+      # Forward pass creates parameters.
+      _, params = model(params, x)
+      params = params.locked()
 
-    class Dropout(bx.Module):
-      def __init__(self, graph, rate, rng):
-        super().__init__(graph)
-        self.rate = rate
-        self.rng = rng
+  Modules that need randomness should accept an Rng on construction::
 
-      def __call__(self, params, x, is_training=True):
-        if not is_training:
-          return x, params
-        key, params = self.rng(params)
-        return jax.random.dropout(key, self.rate, x), params
+      class Dropout(bx.Module):
+
+        def __init__(self, graph, rate, rng):
+          super().__init__(graph)
+          self.rate = rate
+          self.rng = rng
+
+        def __call__(self, params, x, is_training=True):
+          if not is_training:
+            return x, params
+          key, params = self.rng(params)
+          return jax.random.dropout(key, self.rate, x), params
   """
 
   def __init__(self, graph: Graph) -> None:
