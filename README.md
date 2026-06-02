@@ -515,7 +515,9 @@ JAX already ships a strong abstraction: composable transformations over pure fun
 
 **[Flax NNX](https://flax.readthedocs.io/en/latest/nnx_basics.html)** goes the other way: mutable, PyTorch-style module objects with reference semantics. Because ["JAX transformations operate on pytrees of `jax.Array`s and abide by value semantics,"](https://flax.readthedocs.io/en/latest/guides/transforms.html) NNX maintains its *own* transforms—`nnx.jit`, `nnx.grad`, `nnx.vmap`, `nnx.scan`, `nnx.remat`, … ["supersets of their equivalent JAX counterparts"](https://flax.readthedocs.io/en/latest/nnx_basics.html)—plus a `Module` / `State` / `GraphDef` system and a `split` / `merge` ceremony for "crossing boundaries." That is a real maintenance surface and a leaky abstraction: mutation ["must be used with care because it can clash with JAX's underlying assumptions,"](https://flax.readthedocs.io/en/latest/guides/transforms.html) and the maintainers' own plan is to eventually make NNX ["implement the pytree protocol"](https://github.com/google/flax/discussions/4736) so it can be used with raw JAX transforms.
 
-**blox** avoids both boundaries by construction. `Graph` (static Python) and `Params` (dynamic arrays) are *separate objects*, so there is no mixed-leaf tree to filter and no mutable graph to split and merge. `jax.jit`, `jax.grad`, `jax.vmap`, and `jax.checkpoint` apply to a plain function—no `filter_*`, no `nnx.*` wrapper in the way. The one sharp edge blox keeps is JAX's own counter-based PRNG folding (see [Batching & Parallel RNG](#-batching--parallel-rng) above), which it surfaces explicitly rather than hiding.
+**blox** avoids both boundaries by construction. `Graph` (static Python) and `Params` (dynamic arrays) are *separate objects*, so there is no mixed-leaf tree to filter and no mutable graph to split and merge. `jax.jit`, `jax.grad`, `jax.vmap`, and `jax.checkpoint` apply to a plain function—no `filter_*`, no `nnx.*` wrapper in the way.
+
+Randomness is the one sharp edge every JAX library inherits, and the three handle it differently. Equinox threads `jax.random` keys through your functions by hand. NNX hides them inside a stateful `nnx.Rngs` object whose keys live in the graph and need ["extra tricks with `nnx.vmap`"](https://flax.readthedocs.io/en/latest/guides/randomness.html) to behave correctly under transforms. blox keeps JAX's own counter-based `fold_in` pattern and [surfaces it explicitly](#-batching--parallel-rng) rather than wrapping it—the sharp edge is JAX's, and so is everything you learn working around it.
 
 | | Equinox | Flax NNX | **blox** |
 |---|---|---|---|
@@ -523,8 +525,9 @@ JAX already ships a strong abstraction: composable transformations over pure fun
 | Boundary ceremony | `partition` / `combine`, filter specs | `nnx.split` / `nnx.merge` (State / GraphDef) | **None—`params` is already a clean array pytree** |
 | Where state lives | In the module PyTree | In mutable `Module` instances (a graph) | **In a separate `Params` container** |
 | Library-specific transforms to maintain | filtered transforms | a full parallel transform suite | **Zero** |
+| Randomness | manual `jax.random` key threading | stateful `nnx.Rngs` in the graph (`split_rngs` / `StateAxes` for `vmap`/`scan`) | **JAX's own `fold_in` pattern, surfaced** |
 
-*Both Equinox and NNX are mature and a great fit for many projects—Equinox if you like "the model is a PyTree," NNX if mutable PyTorch-style objects feel natural. blox optimizes for keeping the model graph and the parameter tree as two separate objects, so every JAX transform applies to a plain function with nothing library-specific in the way.*
+Both Equinox and NNX are mature and a great fit for many projects—Equinox if you like "the model is a PyTree," NNX if mutable PyTorch-style objects feel natural. **blox makes a different bet: rather than building a framework on top of JAX, it grows directly out of JAX's own philosophy—explicit state, pure functions, no hidden magic.** The graph and the parameters stay separate, every transformation is the real `jax.*` one, and the randomness is JAX's own. What you learn using blox is JAX itself, so your understanding and your code keep paying off as the ecosystem moves—with nothing library-specific standing in the way.
 
 ## 📄 License
 
