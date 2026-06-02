@@ -145,6 +145,7 @@ the pieces fit together.
    :caption: Key Concepts
 
    design
+   comparison
 
 .. toctree::
    :hidden:

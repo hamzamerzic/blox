@@ -62,6 +62,11 @@ html_static_path = ['_static']
 html_logo = '_static/logo.png'
 html_favicon = '_static/favicon.png'
 html_title = 'blox'
+# Canonical base URL so every page emits <link rel="canonical"> (helps Google
+# pick the right version across RTD's /latest, /stable, /vX builds). On RTD
+# this is also auto-detected via READTHEDOCS_CANONICAL_URL; setting it makes
+# local builds correct too.
+html_baseurl = 'https://blox.readthedocs.io/en/latest/'
 
 # Strip the Sphinx-generated copyright + "Made with Sphinx" line from the
 # footer. We hide Furo's "@pradyunsg's Furo" credit via CSS too (see

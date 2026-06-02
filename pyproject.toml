@@ -12,16 +12,33 @@ license = { file = "LICENSE" }
 authors = [
   { name = "Hamza Merzić", email = "hamzamerzic@gmail.com" },
 ]
+keywords = [
+    "jax",
+    "neural-networks",
+    "deep-learning",
+    "machine-learning",
+    "flax",
+    "equinox",
+    "pytree",
+    "functional",
+    "tpu",
+    "gpu",
+]
 classifiers = [
     "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
     "Intended Audience :: Education",
     "Intended Audience :: Science/Research",
     "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Scientific/Engineering :: Mathematics",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
 ]
 dependencies = [
     "jax>=0.10.0",
@@ -31,7 +48,10 @@ dependencies = [
 ]
 
 [project.urls]
+Homepage = "https://github.com/hamzamerzic/blox"
+Documentation = "https://blox.readthedocs.io/en/latest/"
 Repository = "https://github.com/hamzamerzic/blox"
+Issues = "https://github.com/hamzamerzic/blox/issues"
 
 [project.optional-dependencies]
 dev = [

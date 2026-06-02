@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="images/logo.png" width="400" alt="blox logo">
+  <img src="https://raw.githubusercontent.com/hamzamerzic/blox/main/images/logo.png" width="400" alt="blox logo">
 
   <h1>blox</h1>
 
@@ -7,7 +7,7 @@
     <strong>A functional and lightweight neural network library for JAX.</strong>
   </p>
 
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="blox is released under the MIT license"></a>
+  <a href="https://github.com/hamzamerzic/blox/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="blox is released under the MIT license"></a>
   <a href="https://pypi.org/project/jax-blox/"><img src="https://img.shields.io/pypi/v/jax-blox.svg" alt="PyPI"></a>
   <a href="https://blox.readthedocs.io/en/latest/"><img src="https://img.shields.io/readthedocs/blox" alt="Documentation Status"></a>
   <img src="https://img.shields.io/badge/python-3.11+-blue" alt="Python 3.11+">
@@ -506,6 +506,25 @@ out_dynamic, _ = lstm_dynamic.apply(params, inputs, prev_state=state)
 ```
 
 While nothing prevents users from changing modules in place, JAX will not recompile functions automatically unless manually instructed (see [JAX Gotchas](https://docs.jax.dev/en/latest/notebooks/Common_Gotchas_in_JAX.html#using-jax-jit-with-class-methods)). We do support exceptions for ergonomics, such as the `is_training` when evaluation logic is only a simple flag away from training logic, e.g. dropout.
+
+## 🔬 How blox compares: Equinox & Flax NNX
+
+JAX already ships a strong abstraction: composable transformations over pure functions, with [state threaded explicitly through function signatures](https://docs.jax.dev/en/latest/stateful-computations.html). The question a neural-network library answers is *how much of that stays visible*. Two well-built libraries take different routes—and both make simple things easy while adding overhead as models get complicated.
+
+**[Equinox](https://docs.kidger.site/equinox/)** keeps the model *as* a PyTree, which is close to JAX in spirit. But because the module PyTree mixes array leaves with arbitrary Python objects, plain `jax.jit` / `jax.grad` don't apply directly—["it only makes sense to trace arrays."](https://docs.kidger.site/equinox/faq/) You switch to a parallel family of *filtered* transforms (`filter_jit`, `filter_grad`, `filter_vmap`, …), learn `partition` / `combine`, and learn which default filter (`is_array` vs `is_inexact_array`) decides what gets gradients. Stateful layers like `BatchNorm` are threaded by hand, and shared/tied layers are a value-semantics foot-gun.
+
+**[Flax NNX](https://flax.readthedocs.io/en/latest/nnx_basics.html)** goes the other way: mutable, PyTorch-style module objects with reference semantics. Because ["JAX transformations operate on pytrees of `jax.Array`s and abide by value semantics,"](https://flax.readthedocs.io/en/latest/guides/transforms.html) NNX maintains its *own* transforms—`nnx.jit`, `nnx.grad`, `nnx.vmap`, `nnx.scan`, `nnx.remat`, … ["supersets of their equivalent JAX counterparts"](https://flax.readthedocs.io/en/latest/nnx_basics.html)—plus a `Module` / `State` / `GraphDef` system and a `split` / `merge` ceremony for "crossing boundaries." That is a real maintenance surface and a leaky abstraction: mutation ["must be used with care because it can clash with JAX's underlying assumptions,"](https://flax.readthedocs.io/en/latest/guides/transforms.html) and the maintainers' own plan is to eventually make NNX ["implement the pytree protocol"](https://github.com/google/flax/discussions/4736) so it can be used with raw JAX transforms.
+
+**blox** avoids both boundaries by construction. `Graph` (static Python) and `Params` (dynamic arrays) are *separate objects*, so there is no mixed-leaf tree to filter and no mutable graph to split and merge. `jax.jit`, `jax.grad`, `jax.vmap`, and `jax.checkpoint` apply to a plain function—no `filter_*`, no `nnx.*` wrapper in the way. The one sharp edge blox keeps is JAX's own counter-based PRNG folding (see [Batching & Parallel RNG](#-batching--parallel-rng) above), which it surfaces explicitly rather than hiding.
+
+| | Equinox | Flax NNX | **blox** |
+|---|---|---|---|
+| Calls JAX transforms directly | Mostly—non-array leaves force `filter_*` | No—`nnx.jit` / `nnx.scan` / … reimplementations | **Yes—`jax.jit`/`grad`/`vmap`/`checkpoint`, unwrapped** |
+| Boundary ceremony | `partition` / `combine`, filter specs | `nnx.split` / `nnx.merge` (State / GraphDef) | **None—`params` is already a clean array pytree** |
+| Where state lives | In the module PyTree | In mutable `Module` instances (a graph) | **In a separate `Params` container** |
+| Library-specific transforms to maintain | filtered transforms | a full parallel transform suite | **Zero** |
+
+*Both Equinox and NNX are mature and a great fit for many projects—Equinox if you like "the model is a PyTree," NNX if mutable PyTorch-style objects feel natural. blox optimizes for keeping the model graph and the parameter tree as two separate objects, so every JAX transform applies to a plain function with nothing library-specific in the way.*
 
 ## 📄 License
 
