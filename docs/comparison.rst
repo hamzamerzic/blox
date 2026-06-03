@@ -1,5 +1,5 @@
 .. meta::
-   :description: How blox compares to Equinox and Flax NNX — where each library departs from JAX's explicit, no-magic core, and how blox keeps the model graph and parameter tree as separate objects so every JAX transform applies directly.
+   :description: How blox compares to Equinox and Flax NNX: where each library departs from JAX's explicit, no-magic core, and how blox keeps the model graph and parameter tree as separate objects so every JAX transform applies directly.
    :keywords: JAX, neural network library, Equinox alternative, Flax NNX alternative, pytree, filtered transformations, reference semantics
 
 Comparison: Equinox & Flax NNX
@@ -9,7 +9,7 @@ JAX already ships a strong abstraction: composable transformations over pure
 functions, with `state threaded explicitly through function signatures
 <https://docs.jax.dev/en/latest/stateful-computations.html>`_. The question a
 neural-network library answers is *how much of that stays visible*. Equinox and
-Flax NNX are both mature, well-built libraries that take different routes — and
+Flax NNX are both mature, well-built libraries that take different routes, and
 both make simple things easy while adding cognitive overhead as models get
 complicated. This page documents where each one departs from JAX's "explicit,
 no hidden state, no magic" core, and how blox avoids those departures by
@@ -44,7 +44,7 @@ which default filter applies: ``is_array`` (all arrays) vs ``is_inexact_array``
 Coupling state to the module pytree has real foot-guns. With ``BatchNorm``, the
 module's flattened pytree form changes across iterations (`equinox#238
 <https://github.com/patrick-kidger/equinox/issues/238>`_), and tied/shared
-layers diverge under value semantics — the FAQ notes that after some gradient
+layers diverge under value semantics; the FAQ notes that after some gradient
 updates "you'll find that ``self.linear1`` and ``self.linear2`` are now
 different." Stateful layers must be threaded by hand: ``x, state =
 self.norm(x, state)``.
@@ -52,7 +52,7 @@ self.norm(x, state)``.
 Flax NNX: a separate reimplementation of JAX's transforms
 ---------------------------------------------------------
 
-Flax NNX goes the other way — mutable, PyTorch-style module objects with
+Flax NNX goes the other way: mutable, PyTorch-style module objects with
 reference semantics. Because JAX transforms can't operate on mutable
 reference-semantic objects, NNX ships its own version of essentially the entire
 JAX transform surface. From the `NNX Transformations guide
@@ -63,9 +63,9 @@ JAX transform surface. From the `NNX Transformations guide
    ``nnx.Module``\\ s as regular Python objects that follow reference
    semantics."
 
-The result is a full parallel transform suite — ``nnx.jit``, ``nnx.grad``,
+The result is a full parallel transform suite (``nnx.jit``, ``nnx.grad``,
 ``nnx.value_and_grad``, ``nnx.vmap``, ``nnx.pmap``, ``nnx.scan``, ``nnx.remat``,
-``nnx.cond``, ``nnx.while_loop``, and more — described in the
+``nnx.cond``, ``nnx.while_loop``, and more), described in the
 `NNX basics <https://flax.readthedocs.io/en/latest/nnx_basics.html>`_ as
 "supersets of their equivalent JAX counterparts." It is a divergent
 reimplementation, not a thin wrapper: ``nnx.scan`` "(consciously) deviates from
@@ -79,7 +79,7 @@ This is a real maintenance surface and a known leaky abstraction. Mutation
 recompilations"), and the maintainers' own long-term plan is to make NNX
 `implement the pytree protocol
 <https://github.com/google/flax/discussions/4736>`_ specifically so it can be
-"used with raw JAX transformations and other libraries" — i.e. to stop
+"used with raw JAX transformations and other libraries", i.e. to stop
 diverging from raw JAX.
 
 The pattern: simple is easy, complex gets steep
@@ -87,9 +87,9 @@ The pattern: simple is easy, complex gets steep
 
 Both libraries make the toy case easy and add overhead once you leave it.
 Equinox's surface grows with custom initialisation, parameter surgery, and
-scan-over-layers ("The above code probably seems a bit complicated!" — the
+scan-over-layers ("The above code probably seems a bit complicated!", the
 Equinox `tricks <https://docs.kidger.site/equinox/tricks/>`_ page). NNX's
-mutation — the thing that buys the PyTorch-like ergonomics — is also the thing
+mutation (the thing that buys the PyTorch-like ergonomics) is also the thing
 that introduces a new error class (``Inconsistent aliasing detected``) and the
 silent-recompile trap. In both cases the cost lands at the edges, where you
 cross a transform boundary or step outside the happy path.
@@ -109,7 +109,7 @@ handle it differently. Equinox threads ``jax.random`` keys through your
 functions by hand. NNX hides them inside a stateful ``nnx.Rngs`` object whose
 keys live in the graph and need "extra tricks with ``nnx.vmap``" (per the Flax
 `randomness guide <https://flax.readthedocs.io/en/latest/guides/randomness.html>`_)
-to behave correctly under transforms — ``nnx.split_rngs`` and ``nnx.StateAxes``
+to behave correctly under transforms: ``nnx.split_rngs`` and ``nnx.StateAxes``
 when you ``vmap`` or ``scan``. blox keeps JAX's own counter-based ``fold_in``
 pattern and surfaces it explicitly rather than wrapping it (see
 :doc:`sharp_bits` / the RNG notes). The sharp edge is JAX's, and so is
@@ -124,13 +124,13 @@ everything you learn working around it.
      - Flax NNX
      - **blox**
    * - Calls JAX transforms directly
-     - Mostly — non-array leaves force ``filter_*``
-     - No — ``nnx.jit`` / ``nnx.scan`` / … reimplementations
-     - **Yes — unwrapped ``jax.jit`` / ``grad`` / ``vmap`` / ``checkpoint``**
+     - Mostly: non-array leaves force ``filter_*``
+     - No: ``nnx.jit`` / ``nnx.scan`` / … reimplementations
+     - **Yes: unwrapped ``jax.jit`` / ``grad`` / ``vmap`` / ``checkpoint``**
    * - Boundary ceremony
      - ``partition`` / ``combine``, filter specs
      - ``nnx.split`` / ``nnx.merge`` (State / GraphDef)
-     - **None — ``params`` is already a clean array pytree**
+     - **None: ``params`` is already a clean array pytree**
    * - Where state lives
      - In the module pytree
      - In mutable ``Module`` instances (a graph)
@@ -146,16 +146,16 @@ everything you learn working around it.
    * - Main foot-gun
      - value-semantics surprises (shared layers, BatchNorm tree drift)
      - mutation vs ``jit`` (silent recompiles, aliasing rules)
-     - JAX PRNG folding — surfaced, not hidden
+     - JAX PRNG folding: surfaced, not hidden
 
-Both Equinox and NNX are mature and a great fit for many projects — Equinox if
+Both Equinox and NNX are mature and a great fit for many projects: Equinox if
 you like "the model is a pytree," NNX if mutable PyTorch-style objects feel
 natural. **blox makes a different bet: rather than building a framework on top
-of JAX, it grows directly out of JAX's own philosophy — explicit state, pure
+of JAX, it grows directly out of JAX's own philosophy: explicit state, pure
 functions, no hidden magic.** The graph and the parameters stay separate, every
 transformation is the real ``jax.*`` one, and the randomness is JAX's own. What
 you learn using blox is JAX itself, so your understanding and your code keep
-paying off as the ecosystem moves — with nothing library-specific standing in
+paying off as the ecosystem moves, with nothing library-specific standing in
 the way.
 
 Sources

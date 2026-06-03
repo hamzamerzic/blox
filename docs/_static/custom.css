@@ -90,7 +90,7 @@ article[role="main"] {
   margin-bottom: 2rem;
 }
 
-/* Hide RTD's runtime-injected "latest/stable" version flyout — it can
+/* Hide RTD's runtime-injected "latest/stable" version flyout, it can
    overlap content in the bottom-right corner and isn't useful while
    blox has only the `latest` version published. */
 readthedocs-flyout {
@@ -101,7 +101,7 @@ readthedocs-flyout {
    doc stylesheet so subsequent Furo rules pick them up via `--font-stack`. */
 @import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap");
 
-/* Theme toggle sits in Furo's default spot — float-right at the top of the
+/* Theme toggle sits in Furo's default spot, float-right at the top of the
    article, naturally next to the H1. We compensate for that float on the
    centered landing H1 below so it stays truly centered. */
 

@@ -2,17 +2,17 @@
 
 This module defines the fundamental building blocks:
 
-* **Graph** — represents the static, hierarchical structure of the model.
+* **Graph**: represents the static, hierarchical structure of the model.
   It handles naming and pathing (e.g. ``net/layer1/weights``) but stores
   no state.
-* **Params** — a functional, immutable container for all model state
+* **Params**: a functional, immutable container for all model state
   (weights, RNG keys, batch norm stats). It is passed through every
   layer.
-* **Module** — the base class for layers. It connects a ``Graph`` node to
+* **Module**: the base class for layers. It connects a ``Graph`` node to
   parameter creation logic (``get_param`` / ``set_param``).
-* **SequenceBase** — abstract interface for layers that handle sequences
+* **SequenceBase**: abstract interface for layers that handle sequences
   (RNN, Transformer).
-* **RecurrenceBase** — abstract interface for layers that process
+* **RecurrenceBase**: abstract interface for layers that process
   sequences step-by-step (RNN, LSTM, GRU).
 
 These interfaces enforce functional purity and explicit state management,
@@ -60,7 +60,7 @@ class Graph:
 
   The graph serves two purposes:
 
-  * It defines how your model is organized — which modules contain
+  * It defines how your model is organized, which modules contain
     which.
   * It provides unique namespaces for parameters. Each node's path
     (e.g. ``('net', 'encoder', 'dense')``) becomes the prefix for that
@@ -71,7 +71,7 @@ class Graph:
   retains its original position in the graph (as a sibling rather than
   a child), enabling flexible parameter sharing patterns.
 
-  The graph does not store parameters — that's the job of the Params
+  The graph does not store parameters; that's the job of the Params
   container. Graph defines structure; Params holds state.
   """
 
@@ -300,10 +300,10 @@ class Params:
 
   Key features:
 
-  * **Functional updates** — all methods return new Params instances.
-  * **Tuple paths** — parameters are keyed by tuples like
+  * **Functional updates**: all methods return new Params instances.
+  * **Tuple paths**: parameters are keyed by tuples like
     ``('net', 'linear', 'w')``.
-  * **Trainable split** — use ``split()`` to separate trainable from
+  * **Trainable split**: use ``split()`` to separate trainable from
     non-trainable.
 
   Example::
@@ -658,11 +658,11 @@ class Module:
 
   Key features:
 
-  * **Graph binding** — each module owns a Graph node that namespaces
+  * **Graph binding**: each module owns a Graph node that namespaces
     its params.
-  * **Constructor capture** — arguments are automatically saved to
+  * **Constructor capture**: arguments are automatically saved to
     graph metadata for visualization and serialization.
-  * **Parameter helpers** — ``get_param`` and ``set_param`` simplify
+  * **Parameter helpers**: ``get_param`` and ``set_param`` simplify
     parameter handling.
 
   All subclasses must:

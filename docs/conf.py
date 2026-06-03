@@ -88,7 +88,7 @@ _MONO_STACK = (
 html_theme_options = {
     'sidebar_hide_name': True,
     'navigation_with_keys': True,
-    # Drop the view/edit icons — only the theme toggle remains in the
+    # Drop the view/edit icons; only the theme toggle remains in the
     # content-icon-container, repositioned via CSS so it doesn't push the
     # centered landing H1.
     'top_of_page_buttons': [],

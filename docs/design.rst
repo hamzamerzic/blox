@@ -101,7 +101,7 @@ Or use ``jax.lax.axis_index`` with ``axis_name``. **This is the recommended appr
 
 **Why restore the seed?** When params is replicated (``out_axes=None``), JAX requires all lanes to return identical pytrees. Since we run the same function in each lane, the counter increments identically everywhere. The seed is the only thing that differs (due to folding), so restoring it ensures params match.
 
-**Init vs Runtime:** During init (params unlocked), don't fold—you want identical params. During runtime (params locked), do fold for unique randomness. Use ``params.is_locked`` to detect which mode.
+**Init vs Runtime:** During init (params unlocked), don't fold: you want identical params. During runtime (params locked), do fold for unique randomness. Use ``params.is_locked`` to detect which mode.
 
 Initialization with Sharded Parameters
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -139,7 +139,7 @@ Why ``jax.jit`` is better:
 The Params Container
 --------------------
 
-The ``Params`` container holds **all** model state in one place: weights, RNG state, batch norm statistics, moving averages—everything.
+The ``Params`` container holds **all** model state in one place: weights, RNG state, batch norm statistics, moving averages: everything.
 
 **Why put RNG in Params?** In pure functional programming, randomness is state. If your dropout layer consumes a random key, that's a state change. By threading RNG through ``Params``, the signature ``outputs, params = model(params, inputs)`` tells the whole truth.
 
@@ -230,7 +230,7 @@ Lazy Initialization
    _, params = model(params, dummy_input)
    params = params.locked()
 
-You can also use ``jax.eval_shape()`` to get parameter structure without allocating memory—useful for setting up sharding.
+You can also use ``jax.eval_shape()`` to get parameter structure without allocating memory, useful for setting up sharding.
 
 Why the Verbosity?
 ------------------
@@ -270,7 +270,7 @@ A key design principle in blox is the **clean separation between parameters and 
 
 2. **Avoids pytree complexity.** When modules are pytrees containing both static configuration and JAX arrays, you get finnicky behavior requiring magic handling and special wrappers. blox keeps a clean split: the ``Graph`` is purely static (Python objects describing structure), while ``Params`` is purely dynamic (JAX arrays ready for transformations).
 
-3. **Graph is static, params are dynamic.** The graph describes *what* operations to perform. The params provide *what values* to use. This separation is maintained throughout execution—graph structure doesn't change at runtime, only param values do.
+3. **Graph is static, params are dynamic.** The graph describes *what* operations to perform. The params provide *what values* to use. This separation is maintained throughout execution; graph structure doesn't change at runtime, only param values do.
 
 **Multiple models can share the same params:**
 

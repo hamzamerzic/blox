@@ -5,13 +5,13 @@ for use.
 
 Included layers:
 
-* **Core** — ``Embed``, ``Linear``.
-* **Convolution** — ``Conv``, ``ConvTranspose``.
-* **Recurrent** — ``LSTM``, ``GRU``.
-* **Normalization** — ``LayerNorm``, ``RMSNorm``, ``BatchNorm``.
-* **Regularization** — ``Dropout``.
-* **Containers** — ``Sequential``.
-* **Pooling** — ``max_pool``, ``min_pool``, ``avg_pool``.
+* **Core**: ``Embed``, ``Linear``.
+* **Convolution**: ``Conv``, ``ConvTranspose``.
+* **Recurrent**: ``LSTM``, ``GRU``.
+* **Normalization**: ``LayerNorm``, ``RMSNorm``, ``BatchNorm``.
+* **Regularization**: ``Dropout``.
+* **Containers**: ``Sequential``.
+* **Pooling**: ``max_pool``, ``min_pool``, ``avg_pool``.
 
 Blocks are usually subclasses of :class:`blox.Module` which strictly
 follows the ``(params, inputs) -> (outputs, params)`` functional

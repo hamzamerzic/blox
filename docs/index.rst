@@ -35,15 +35,15 @@ The entire mental model fits in one line:
    outputs, params = model(params, inputs)
 
 Parameters go in, outputs and updated parameters come out. Because state
-flows explicitly through your code, all JAX transformations —
-``jax.jit``, ``jax.grad``, ``jax.vmap``, ``jax.checkpoint`` — work out
+flows explicitly through your code, all JAX transformations
+(``jax.jit``, ``jax.grad``, ``jax.vmap``, ``jax.checkpoint``) work out
 of the box. No wrappers, no decorators, no surprises.
 
 Who is blox for?
 ----------------
 
 * **Learners.** There is no "framework magic" to learn. What you see is
-  what you get — the best way to understand how neural networks actually
+  what you get: the best way to understand how neural networks actually
   work at the JAX level.
 * **Practitioners.** If you're tired of fighting frameworks that hide
   important details, blox gives you complete transparency. Whether you're
@@ -120,7 +120,7 @@ Wire it up and run a forward pass:
    outputs, params = model(params, jnp.ones((4, 784)))
    params = params.locked()  # Lock to prevent accidental param creation.
 
-JIT, grad, vmap — they all just work, because the function signature
+JIT, grad, vmap: they all just work, because the function signature
 already tells the whole truth.
 
 .. code-block:: python
