@@ -519,7 +519,7 @@ Randomness is the one sharp edge every JAX library inherits, and the three handl
 | Library-specific transforms to maintain | filtered transforms | a full parallel transform suite | **Zero** |
 | Randomness | manual `jax.random` key threading | stateful `nnx.Rngs` in the graph (`split_rngs` / `StateAxes` for `vmap`/`scan`) | **JAX's own `fold_in` pattern, surfaced** |
 
-Both Equinox and NNX are mature and a great fit for many projects: Equinox if you like "the model is a PyTree," NNX if mutable PyTorch-style objects feel natural. **blox makes a different bet: rather than building a framework on top of JAX, it grows directly out of JAX's own philosophy of explicit state, pure functions, and no hidden magic.** The graph and the parameters stay separate, every transformation is the real `jax.*` one, and the randomness is JAX's own. What you learn using blox is JAX itself, so your understanding and your code keep paying off as the ecosystem moves, with nothing library-specific standing in the way.
+Both Equinox and NNX are mature and a great fit for many projects. Equinox suits you if you like "the model is a PyTree," and NNX if mutable PyTorch-style objects feel natural, with a large community and a strong development team behind it. **blox makes a different bet. Rather than building a framework on top of JAX, it grows directly out of JAX's own philosophy of explicit state, pure functions, and no hidden magic.** The graph and the parameters stay separate, every transformation is the real `jax.*` one, and the randomness is JAX's own. What you learn using blox is JAX itself, so your understanding and your code keep paying off as the ecosystem moves, with nothing library-specific standing in the way.
 
 ## 📄 License
 

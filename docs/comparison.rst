@@ -15,10 +15,11 @@ complicated. This page documents where each one departs from JAX's "explicit,
 no hidden state, no magic" core, and how blox avoids those departures by
 construction.
 
-A note on fairness up front: neither library is bad. Equinox stays close to
+A note on fairness up front. Neither library is bad. Equinox stays close to
 JAX and is explicitly designed to "feel like (and be fully compatible with) the
 main JAX library itself." NNX's reference semantics make model surgery and
-inspection genuinely easy. The argument below is about *where the abstraction
+inspection genuinely easy, and it has a large community and a strong
+development team behind it. The argument below is about *where the abstraction
 leaks*, not about whether these libraries are good.
 
 Equinox: modules as pytrees, plus a filtering layer
@@ -52,7 +53,7 @@ self.norm(x, state)``.
 Flax NNX: a separate reimplementation of JAX's transforms
 ---------------------------------------------------------
 
-Flax NNX goes the other way: mutable, PyTorch-style module objects with
+Flax NNX goes the other way, with mutable, PyTorch-style module objects and
 reference semantics. Because JAX transforms can't operate on mutable
 reference-semantic objects, NNX ships its own version of essentially the entire
 JAX transform surface. From the `NNX Transformations guide
@@ -68,7 +69,7 @@ The result is a full parallel transform suite (``nnx.jit``, ``nnx.grad``,
 ``nnx.cond``, ``nnx.while_loop``, and more), described in the
 `NNX basics <https://flax.readthedocs.io/en/latest/nnx_basics.html>`_ as
 "supersets of their equivalent JAX counterparts." It is a divergent
-reimplementation, not a thin wrapper: ``nnx.scan`` "(consciously) deviates from
+reimplementation, not a thin wrapper. ``nnx.scan`` "(consciously) deviates from
 ``jax.lax.scan``." Underneath sits a ``Module`` / ``State`` / ``GraphDef``
 system (NNX is a graph, not a pytree, by design), and crossing into a JAX
 transform requires a ``split`` / ``merge`` ceremony.
@@ -109,8 +110,8 @@ handle it differently. Equinox threads ``jax.random`` keys through your
 functions by hand. NNX hides them inside a stateful ``nnx.Rngs`` object whose
 keys live in the graph and need "extra tricks with ``nnx.vmap``" (per the Flax
 `randomness guide <https://flax.readthedocs.io/en/latest/guides/randomness.html>`_)
-to behave correctly under transforms: ``nnx.split_rngs`` and ``nnx.StateAxes``
-when you ``vmap`` or ``scan``. blox keeps JAX's own counter-based ``fold_in``
+to behave correctly under transforms, namely ``nnx.split_rngs`` and
+``nnx.StateAxes`` when you ``vmap`` or ``scan``. blox keeps JAX's own counter-based ``fold_in``
 pattern and surfaces it explicitly rather than wrapping it (see
 :doc:`sharp_bits` / the RNG notes). The sharp edge is JAX's, and so is
 everything you learn working around it.
