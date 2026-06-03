@@ -20,9 +20,9 @@
 
 **blox** unlocks the full potential of JAX by embracing its functional nature instead of fighting it.
 
-JAX gives you composable transformations over pure functions: write the math, then use `jax.jit`, `jax.grad`, `jax.vmap`, or `jax.checkpoint` on it directly. **blox** is a thin layer on top that adds just enough structure to organize your neural networks, without hiding state behind module objects, global contexts, or framework-specific transform wrappers.
+JAX gives you composable transformations over pure functions. Write the math, then use `jax.jit`, `jax.grad`, `jax.vmap`, or `jax.checkpoint` on it directly. **blox** is a thin layer on top that adds just enough structure to organize your neural networks, without hiding state behind module objects, global contexts, or framework-specific transform wrappers.
 
-Most JAX libraries try to make JAX feel like PyTorch, forcing an Object-Oriented model on top of it. That is comfortable at first, but it fights JAX's functional nature: it introduces implicit global state and hidden contexts that steepen the learning curve and add cognitive load as your models grow.
+Most JAX libraries try to make JAX feel like PyTorch, forcing an Object-Oriented model on top of it. That is comfortable at first, but it fights JAX's functional nature, introducing implicit global state and hidden contexts that steepen the learning curve and add cognitive load as your models grow.
 
 **blox** takes the opposite approach and embraces the functional nature of JAX. The entire mental model fits in one line:
 
@@ -150,7 +150,7 @@ outputs, params = jax.jit(model)(params, inputs)
 
 The `Params` container holds **all** model state in one place: weights, RNG state, batch norm statistics, moving averages, everything. This is intentional.
 
-**Why put RNG in Params?** In pure functional programming, randomness is state. If your dropout layer consumes a random key, that's a state change. By threading RNG through `Params`, the signature `outputs, params = model(params, inputs)` tells the whole truth: this function might update some internal state.
+**Why put RNG in Params?** In pure functional programming, randomness is state. If your dropout layer consumes a random key, that's a state change. By threading RNG through `Params`, the signature `outputs, params = model(params, inputs)` tells the whole truth, namely that this function might update some internal state.
 
 This design means every parameter is either:
 
@@ -196,9 +196,9 @@ def train_step(params, inputs, targets):
 
 > **⚠️ JAX Sharp Edge**: This section describes patterns needed due to JAX's PRNG design, not blox design decisions. The main sharp edge is around **initialization with `shard_map`** where different parameters may need different sharding. For `vmap` the patterns are straightforward once understood.
 
-Here is a sharp edge in JAX: if you `vmap` or `shard_map` a function that uses random numbers, every batch element/device gets the *same* random key by default. This means your dropout masks would be identical across the whole batch, defeating the purpose of dropout entirely.
+Here is a sharp edge in JAX. If you `vmap` or `shard_map` a function that uses random numbers, every batch element/device gets the *same* random key by default. This means your dropout masks would be identical across the whole batch, defeating the purpose of dropout entirely.
 
-**blox** does not hide this behavior from you. Instead, we give you the tools to handle it explicitly: you fold in the lane index when you need unique randomness.
+**blox** does not hide this behavior from you. Instead, we give you the tools to handle it explicitly, so you fold in the lane index when you need unique randomness.
 
 ### Understanding JAX's Counter-Based PRNG
 
@@ -475,7 +475,7 @@ A key design principle is the **clean separation between parameters and the mode
 * **Actor vs Learner in RL**: Separate models for data collection and training that share weights.
 * **Training vs Evaluation**: Scenarios where evaluation logic differs significantly while relying on the same parameters.
 
-**Rule of thumb:** If the model needs recompilation, prefer creating a new model instead of modifying an existing one or creating an Uber-module. Let the function shape the design: if you need both static and dynamic scanning behavior, create two models.
+**Rule of thumb:** If the model needs recompilation, prefer creating a new model instead of modifying an existing one or creating an Uber-module. Let the function shape the design. If you need both static and dynamic scanning behavior, create two models.
 
 ```python
 # Create two LSTM variants with the same parameter structure.
@@ -501,15 +501,15 @@ While nothing prevents users from changing modules in place, JAX will not recomp
 
 ## 🔬 How blox compares: Equinox & Flax NNX
 
-JAX already ships a strong abstraction: composable transformations over pure functions, with [state threaded explicitly through function signatures](https://docs.jax.dev/en/latest/stateful-computations.html). The question a neural-network library answers is *how much of that stays visible*. Two well-built libraries take different routes, and both make simple things easy while adding overhead as models get complicated.
+JAX already ships a strong abstraction, namely composable transformations over pure functions, with [state threaded explicitly through function signatures](https://docs.jax.dev/en/latest/stateful-computations.html). The question a neural-network library answers is *how much of that stays visible*. Two well-built libraries take different routes, and both make simple things easy while adding overhead as models get complicated.
 
-**[Equinox](https://docs.kidger.site/equinox/)** keeps the model *as* a PyTree, which is close to JAX in spirit. But because the module PyTree mixes array leaves with arbitrary Python objects, plain `jax.jit` / `jax.grad` don't apply directly: ["it only makes sense to trace arrays."](https://docs.kidger.site/equinox/faq/) You switch to a parallel family of *filtered* transforms (`filter_jit`, `filter_grad`, `filter_vmap`, …), learn `partition` / `combine`, and learn which default filter (`is_array` vs `is_inexact_array`) decides what gets gradients. Stateful layers like `BatchNorm` are threaded by hand, and shared/tied layers are a value-semantics foot-gun.
+**[Equinox](https://docs.kidger.site/equinox/)** keeps the model *as* a PyTree, which is close to JAX in spirit. But because the module PyTree mixes array leaves with arbitrary Python objects, plain `jax.jit` / `jax.grad` don't apply directly, because ["it only makes sense to trace arrays."](https://docs.kidger.site/equinox/faq/) You switch to a parallel family of *filtered* transforms (`filter_jit`, `filter_grad`, `filter_vmap`, …), learn `partition` / `combine`, and learn which default filter (`is_array` vs `is_inexact_array`) decides what gets gradients. Stateful layers like `BatchNorm` are threaded by hand, and shared/tied layers are a value-semantics foot-gun.
 
-**[Flax NNX](https://flax.readthedocs.io/en/latest/nnx_basics.html)** goes the other way: mutable, PyTorch-style module objects with reference semantics. Because ["JAX transformations operate on pytrees of `jax.Array`s and abide by value semantics,"](https://flax.readthedocs.io/en/latest/guides/transforms.html) NNX maintains its *own* transforms (`nnx.jit`, `nnx.grad`, `nnx.vmap`, `nnx.scan`, `nnx.remat`, …, ["supersets of their equivalent JAX counterparts"](https://flax.readthedocs.io/en/latest/nnx_basics.html)), plus a `Module` / `State` / `GraphDef` system and a `split` / `merge` ceremony for "crossing boundaries." That is a real maintenance surface and a leaky abstraction: mutation ["must be used with care because it can clash with JAX's underlying assumptions,"](https://flax.readthedocs.io/en/latest/guides/transforms.html) and the maintainers' own plan is to eventually make NNX ["implement the pytree protocol"](https://github.com/google/flax/discussions/4736) so it can be used with raw JAX transforms.
+**[Flax NNX](https://flax.readthedocs.io/en/latest/nnx_basics.html)** goes the other way, using mutable, PyTorch-style module objects with reference semantics. Because ["JAX transformations operate on pytrees of `jax.Array`s and abide by value semantics,"](https://flax.readthedocs.io/en/latest/guides/transforms.html) NNX maintains its *own* transforms (`nnx.jit`, `nnx.grad`, `nnx.vmap`, `nnx.scan`, `nnx.remat`, …, ["supersets of their equivalent JAX counterparts"](https://flax.readthedocs.io/en/latest/nnx_basics.html)), plus a `Module` / `State` / `GraphDef` system and a `split` / `merge` ceremony for "crossing boundaries." That is a real maintenance surface and a leaky abstraction, because mutation ["must be used with care because it can clash with JAX's underlying assumptions,"](https://flax.readthedocs.io/en/latest/guides/transforms.html) and the maintainers' own plan is to eventually make NNX ["implement the pytree protocol"](https://github.com/google/flax/discussions/4736) so it can be used with raw JAX transforms.
 
 **blox** avoids both boundaries by construction. `Graph` (static Python) and `Params` (dynamic arrays) are *separate objects*, so there is no mixed-leaf tree to filter and no mutable graph to split and merge. `jax.jit`, `jax.grad`, `jax.vmap`, and `jax.checkpoint` apply to a plain function: no `filter_*`, no `nnx.*` wrapper in the way.
 
-Randomness is the one sharp edge every JAX library inherits, and the three handle it differently. Equinox threads `jax.random` keys through your functions by hand. NNX hides them inside a stateful `nnx.Rngs` object whose keys live in the graph and need ["extra tricks with `nnx.vmap`"](https://flax.readthedocs.io/en/latest/guides/randomness.html) to behave correctly under transforms. blox keeps JAX's own counter-based `fold_in` pattern and [surfaces it explicitly](#-batching--parallel-rng) rather than wrapping it: the sharp edge is JAX's, and so is everything you learn working around it.
+Randomness is the one sharp edge every JAX library inherits, and the three handle it differently. Equinox threads `jax.random` keys through your functions by hand. NNX hides them inside a stateful `nnx.Rngs` object whose keys live in the graph and need ["extra tricks with `nnx.vmap`"](https://flax.readthedocs.io/en/latest/guides/randomness.html) to behave correctly under transforms. blox keeps JAX's own counter-based `fold_in` pattern and [surfaces it explicitly](#-batching--parallel-rng) rather than wrapping it. The sharp edge is JAX's, and so is everything you learn working around it.
 
 | | Equinox | Flax NNX | **blox** |
 |---|---|---|---|

@@ -5,7 +5,7 @@
 Comparison: Equinox & Flax NNX
 ==============================
 
-JAX already ships a strong abstraction: composable transformations over pure
+JAX already ships a strong abstraction, composable transformations over pure
 functions, with `state threaded explicitly through function signatures
 <https://docs.jax.dev/en/latest/stateful-computations.html>`_. The question a
 neural-network library answers is *how much of that stays visible*. Equinox and
@@ -125,13 +125,13 @@ everything you learn working around it.
      - Flax NNX
      - **blox**
    * - Calls JAX transforms directly
-     - Mostly: non-array leaves force ``filter_*``
-     - No: ``nnx.jit`` / ``nnx.scan`` / … reimplementations
-     - **Yes: unwrapped ``jax.jit`` / ``grad`` / ``vmap`` / ``checkpoint``**
+     - Mostly, but non-array leaves force ``filter_*``
+     - No, ``nnx.jit`` / ``nnx.scan`` / … reimplementations
+     - **Yes, unwrapped ``jax.jit`` / ``grad`` / ``vmap`` / ``checkpoint``**
    * - Boundary ceremony
      - ``partition`` / ``combine``, filter specs
      - ``nnx.split`` / ``nnx.merge`` (State / GraphDef)
-     - **None: ``params`` is already a clean array pytree**
+     - **None, ``params`` is already a clean array pytree**
    * - Where state lives
      - In the module pytree
      - In mutable ``Module`` instances (a graph)
@@ -147,11 +147,11 @@ everything you learn working around it.
    * - Main foot-gun
      - value-semantics surprises (shared layers, BatchNorm tree drift)
      - mutation vs ``jit`` (silent recompiles, aliasing rules)
-     - JAX PRNG folding: surfaced, not hidden
+     - JAX PRNG folding, surfaced not hidden
 
 Both Equinox and NNX are mature and a great fit for many projects: Equinox if
 you like "the model is a pytree," NNX if mutable PyTorch-style objects feel
-natural. **blox makes a different bet: rather than building a framework on top
+natural. **blox makes a different bet. Rather than building a framework on top
 of JAX, it grows directly out of JAX's own philosophy: explicit state, pure
 functions, no hidden magic.** The graph and the parameters stay separate, every
 transformation is the real ``jax.*`` one, and the randomness is JAX's own. What
